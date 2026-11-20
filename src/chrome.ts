@@ -80,7 +80,8 @@ export const install = () => {
     }
   }
   const relay = path.join(HOME, "relay")
-  const script = `#!/bin/sh\nexec "${process.execPath}" "${path.join(import.meta.dir, "relay.ts")}" "$@"\n`
+  // The binary running this may be a host compiled with bun, which is bun again with BUN_BE_BUN set.
+  const script = `#!/bin/sh\nBUN_BE_BUN=1 exec "${process.execPath}" "${path.join(import.meta.dir, "relay.ts")}" "$@"\n`
   if (!existsSync(relay) || readFileSync(relay, "utf-8") !== script) {
     writeFileSync(relay, script, { mode: 0o755 })
   }
