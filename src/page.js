@@ -378,7 +378,7 @@
     "payment or identity number": "payment or identity field",
   }
 
-  /** A field marked as holding a secret: it's never read back. */
+  /** The mark on a field the host filled with one of the person's secrets (`seal`): it's never read back from here on. */
   const SEALED = "data-switch-sealed"
 
   /** What an element is called, without its passing states: how a re-rendered copy is recognized. */
@@ -919,6 +919,128 @@
     return value.length
   }
 
+  /** How many characters a field holds and how many of them are digits, never what they are. */
+  function held(n, fp) {
+    const el = resolve(n, fp)
+    const inner = el.matches("input, textarea, [contenteditable]")
+      ? el
+      : (el.querySelector("input, textarea, [contenteditable]") ?? el)
+    const value =
+      inner.tagName === "INPUT" || inner.tagName === "TEXTAREA"
+        ? inner.value
+        : (inner.innerText ?? inner.textContent ?? "")
+    return { length: value.length, digits: (value.match(/\d/g) ?? []).length }
+  }
+
+  /**
+   * Marks a field the host just filled with one of the person's secrets (and
+   * the editor in it the text went into), so it counts as a payment or
+   * identity field from here on, which nothing reads back, and screenshots
+   * show dots where its characters are.
+   */
+  function seal(n, fp) {
+    const el = resolve(n, fp)
+    const inner = el.matches("input, textarea, select, [contenteditable]")
+      ? el
+      : el.querySelector("input, textarea, select, [contenteditable]")
+    const focused = deepActive()
+    const typedInto =
+      focused &&
+      (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)
+        ? focused
+        : null
+    for (const field of new Set([el, inner, typedInto].filter(Boolean))) {
+      field.setAttribute(SEALED, "")
+      if (field.tagName !== "SELECT")
+        field.style.setProperty("-webkit-text-security", "disc", "important")
+    }
+    return true
+  }
+
+  /**
+   * Picks the dropdown option for one of the person's secrets (a card's month
+   * or year): by its value or text, or the same number ("07" for "7 - July",
+   * "2031" for "31"). Fails without saying which it looked for.
+   */
+  function chooseSecret(n, fp, wanted) {
+    const el = resolve(n, fp)
+    if (el.tagName !== "SELECT") throw new Error(`element ${n} isn't a dropdown`)
+    const want = String(wanted)
+    const lead = (text) => {
+      const m = /^\s*(\d+)/.exec(text)
+      return m ? Number(m[1]) : null
+    }
+    const number = /^\d+$/.test(want) ? Number(want) : null
+    const short = /^\d{4}$/.test(want) ? Number(want.slice(2)) : null
+    const fits = (o) =>
+      [o.value, clean(o.textContent)].some(
+        (t) =>
+          t === want ||
+          (number !== null &&
+            (lead(t) === number ||
+              (short !== null && /^\s*\d{2}\s*$/.test(t) && lead(t) === short))),
+      )
+    const option = [...el.options].find(fits)
+    if (!option) throw new Error(`none of element ${n}'s ${el.options.length} options fits it`)
+    setNative(el, option.value)
+    return true
+  }
+
+  /** The card fields of the form `cardForm` makes. */
+  const CARD = ["name", "number", "month", "year", "cvc"]
+  const cardField = (name) => document.querySelector(`input[name="sw-card-${name}"]`)
+
+  /** A card form of the host's own, in place of the page's words, for the browser's autofill to fill with a card it has saved. */
+  function cardForm() {
+    const autocomplete = {
+      name: "cc-name",
+      number: "cc-number",
+      month: "cc-exp-month",
+      year: "cc-exp-year",
+      cvc: "cc-csc",
+    }
+    const labels = {
+      name: "Name on card",
+      number: "Card number",
+      month: "Expiry month",
+      year: "Expiry year",
+      cvc: "Security code",
+    }
+    const form = document.createElement("form")
+    form.setAttribute("autocomplete", "on")
+    for (const name of CARD) {
+      const label = document.createElement("label")
+      label.textContent = `${labels[name]} `
+      const input = document.createElement("input")
+      input.name = `sw-card-${name}`
+      input.setAttribute("autocomplete", autocomplete[name])
+      label.append(input)
+      form.append(label, document.createElement("br"))
+    }
+    document.body.replaceChildren(form)
+    return true
+  }
+
+  /** How many characters each field of the card form holds. */
+  function cardFilled() {
+    return Object.fromEntries(CARD.map((name) => [name, cardField(name)?.value.length ?? 0]))
+  }
+
+  /** The card form's values, which the host keeps in the Keychain and never returns. */
+  function harvest() {
+    return Object.fromEntries(CARD.map((name) => [name, cardField(name)?.value ?? ""]))
+  }
+
+  /** Empties the card form, then the page. */
+  function wipe() {
+    for (const name of CARD) {
+      const field = cardField(name)
+      if (field) field.value = ""
+    }
+    document.body.replaceChildren()
+    return true
+  }
+
   /** A dropdown's options, by their text. */
   function options(n, fp) {
     const el = resolve(n, fp)
@@ -1236,6 +1358,53 @@
     return button ? number(button, fingerprint(button)) : null
   }
 
+  /** On an account picker, the one tile for this username: its number, or null. */
+  function chooser(username) {
+    const wanted = username.toLowerCase()
+    const tiles = gather(500).targets.filter(
+      (el) =>
+        el.tagName !== "INPUT" &&
+        /button|link|option|listitem|menuitem|div/.test(implicitRole(el)) &&
+        clean(el.innerText).toLowerCase().includes(wanted),
+    )
+    return tiles.length === 1 ? number(tiles[0], fingerprint(tiles[0])) : null
+  }
+
+  /**
+   * What an element holds, for a stored account's vault and nothing else:
+   * a field's value (a password field's too), else an otpauth link in or
+   * under it, else its text. Without an element, the page's: an otpauth
+   * link anywhere in it, else all its words. The host keeps it and never
+   * returns it.
+   */
+  function reveal(n, fp) {
+    const el = n == null ? document.body : resolve(n, fp)
+    const inner =
+      n == null ? null : el.matches("input, textarea") ? el : el.querySelector("input, textarea")
+    if (inner?.value) return inner.value
+    const link = [el, ...el.querySelectorAll("[href], [src], [data-value], [value]")]
+      .flatMap((x) => [
+        x.getAttribute("href"),
+        x.getAttribute("src"),
+        x.getAttribute("data-value"),
+        x.getAttribute("value"),
+      ])
+      .find((v) => v?.startsWith("otpauth://"))
+    if (link) return link
+    // A page's words take in its same-origin frames, and keys shown in read-only boxes.
+    const more =
+      n == null
+        ? everything().flatMap((x) =>
+            /^I?FRAME$/.test(x.tagName)
+              ? [frameDocument(x)?.body?.innerText ?? ""]
+              : x.tagName === "INPUT" && x.readOnly
+                ? [x.value]
+                : [],
+          )
+        : []
+    return [el.innerText ?? el.textContent ?? "", ...more].join("\n")
+  }
+
   globalThis.__switch = {
     version: VERSION,
     focused,
@@ -1260,6 +1429,15 @@
     canScrollAt,
     signin,
     submitter,
+    chooser,
+    reveal,
+    held,
+    seal,
+    chooseSecret,
+    cardForm,
+    cardFilled,
+    harvest,
+    wipe,
   }
   return "installed"
 })()

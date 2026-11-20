@@ -118,6 +118,23 @@ interface Link {
 
 type Listener = (session: string, method: string, params: Json) => void
 
+/** The page in front, as the extension last said. */
+export interface Page {
+  readonly url: string
+  readonly title: string
+  /** An agent is driving it, so it being in front isn't the user looking at it. */
+  readonly agent: boolean
+  /** None of the browser's windows the extension can see is in front. */
+  readonly hidden: boolean
+}
+
+const pageListeners: ((page: Page) => void)[] = []
+
+/** Follows the page in front. */
+export const onPage = (listener: (page: Page) => void) => {
+  pageListeners.push(listener)
+}
+
 const links: Link[] = []
 const waiting = new Map<string, (reply: Json) => void>()
 const listeners: Listener[] = []
@@ -148,6 +165,16 @@ const heard = (link: Link, message: Json) => {
   if (type === "browser") {
     const pid = typeof message.pid === "number" ? message.pid : null
     link.browser = { name: str(message.name), bundle: str(message.bundle), pid }
+  } else if (type === "page") {
+    const page: Page = {
+      url: str(message.url),
+      title: str(message.title),
+      agent: message.agent === true,
+      hidden: message.hidden === true,
+    }
+    for (const listener of pageListeners) {
+      listener(page)
+    }
   } else if (type === "reply") {
     const id = str(message.id)
     waiting.get(id)?.(message)

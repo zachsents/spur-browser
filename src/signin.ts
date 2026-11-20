@@ -1,15 +1,17 @@
-// Signing in with the browser's saved passwords. `sign_in` has the browser itself fill a sign-in
-// page's username and password from its password manager (its own suggestions, picked through
-// Accessibility), page after page (email, then password), and sends each on. A page asking for a
-// one-time code is filled from `otp`; without one, the user is asked for it with an action item and
-// the tab is held for it. A field still there after it was sent is reported, never retried. Nothing
+// Signing in. `sign_in` fills a sign-in page's username and password, page after page (email, then
+// password), and sends each on: from one of this Mac's stored accounts when `account` names one
+// (accounts.ts), else the browser fills them itself from its saved passwords (its own suggestions,
+// picked through Accessibility). A page asking for a one-time code is filled from `otp`, or a stored
+// account's authenticator key; without either, the user is asked for it with an action item and the
+// tab is held for it. A field still there after it was sent is reported, never retried. Nothing
 // secret ever passes through here: what was filled is said by how many characters it holds.
-// Ported from Switchboard's signin.rs, filling from the browser instead of a vault of its own.
-import * as chrome from "./chrome.ts"
+// `save_account` keeps an account; `accounts` lists them. Ported from Switchboard's signin.rs.
+import * as accounts from "./accounts.ts"
+import type { Account, Secrets } from "./accounts.ts"
 import type { Json } from "./chrome.ts"
 import { isJson } from "./chrome.ts"
 import { actionItem } from "./core.ts"
-import { browserFills, done, nowOn, num, str, whatAt } from "./common.ts"
+import { browserFills, done, hold, nowOn, num, str, whatAt } from "./common.ts"
 import type { Done } from "./common.ts"
 import { parseKey } from "./tab.ts"
 import type { Tab } from "./tab.ts"
@@ -44,14 +46,6 @@ const fieldsOf = (found: unknown): Field[] =>
           },
         ]
   })
-
-const hostOf = (url: string) => {
-  try {
-    return new URL(url).hostname
-  } catch {
-    return ""
-  }
-}
 
 /** Sends a filled field's form on: its submit button, else Enter. */
 const send = async (tab: Tab, field: Field) => {
@@ -99,37 +93,164 @@ const putCode = async (tab: Tab, f: Field, code: string) => {
   return await tab.fillHidden(f.n, code)
 }
 
+/** Where a sign-in's username and password come from. */
+interface Source {
+  /** How results name it. */
+  readonly who: string
+  /** Whether it fills a kind of field ("username", "password", "code"). */
+  readonly has: (kind: string) => boolean
+  /** Fills this page's fields of those kinds; says what went where. */
+  readonly fill: (tab: Tab, fields: readonly Field[]) => Promise<string[]>
+}
+
+/** What a page's fields hold now, as results say it. */
+const heldNow = async (tab: Tab, fields: readonly Field[], filled: Set<string>) => {
+  const said: string[] = []
+  for (const f of fields) {
+    const held = await lengthOf(tab, f)
+    if (held > 0) {
+      filled.add(f.kind)
+      said.push(
+        f.kind === "password"
+          ? `the password into ${f.line} (${held} characters)`
+          : `the ${f.kind} into ${f.line}`,
+      )
+    }
+  }
+  return said
+}
+
+/** The browser offered several saved sign-ins and none was named. */
+class OffersError extends Error {
+  override name = "OffersError"
+
+  readonly labels: readonly string[]
+
+  constructor(host: string, labels: readonly string[]) {
+    super(
+      `The browser offers these saved sign-ins for ${host}:\n${labels.map((l) => `- ${l}`).join("\n")}\nsign_in again with account: words from one.`,
+    )
+    this.labels = labels
+  }
+}
+/** The browser's saved passwords: `pick` is words in its suggestion, or the one it offers. */
+const fromBrowser = (
+  start: string | null,
+  host: string,
+): Source & { pick: () => string | null } => {
+  let pick = start
+  return {
+    who: "the browser's saved passwords",
+    pick: () => pick,
+    has: (kind) => kind === "username" || kind === "password",
+    fill: async (tab, fields) => {
+      const [first] = fields
+      if (!first) {
+        return []
+      }
+      const at = await tab.point(first.n)
+      if (pick === null) {
+        // The one saved sign-in the browser offers here, else the list to choose from.
+        const offered = await browserFills(tab, at, null)
+        const [only, ...more] = offered.labels
+        if (only === undefined || more.length > 0) {
+          throw new OffersError(host, offered.labels)
+        }
+        pick = only
+      }
+      const offered = await browserFills(tab, at, pick)
+      await Bun.sleep(400)
+      const said = await heldNow(tab, fields, new Set())
+      if (said.length === 0) {
+        throw new Error(
+          `The browser chose "${offered.chose ?? pick}" but the fields still read empty: it may be asking to verify it's the user (Touch ID or the Mac's password); look at a screenshot`,
+        )
+      }
+      return said
+    },
+  }
+}
+
+/** One of this Mac's stored accounts. */
+const fromStore = (name: string, a: Account, secret: Secrets): Source => ({
+  who: a.username === undefined ? name : `${name} (${a.username})`,
+  has: (kind) =>
+    (kind === "username" && a.username !== undefined) ||
+    (kind === "password" && secret.password !== undefined) ||
+    (kind === "code" && secret.totp !== undefined),
+  fill: async (tab, fields) => {
+    const said: string[] = []
+    for (const f of fields) {
+      if (f.kind === "username" && a.username !== undefined) {
+        await tab.fill(f.n, a.username)
+        said.push(`the username into ${f.line}`)
+      } else if (f.kind === "password" && secret.password !== undefined) {
+        const held = await tab.fillHidden(f.n, secret.password)
+        const wanted = secret.password.length
+        if (held !== wanted) {
+          throw new Error(
+            `${f.line} holds ${held} characters after filling the password, not ${wanted}: the field cuts or changes it; look at the page`,
+          )
+        }
+        said.push(`the password into ${f.line} (${held} characters)`)
+      } else if (f.kind === "code" && secret.totp !== undefined) {
+        const held = await putCode(tab, f, await accounts.currentCode(secret.totp))
+        if (held === 0) {
+          throw new Error(
+            `${f.line} still reads empty after filling the authenticator code: look at the page`,
+          )
+        }
+        said.push(`the authenticator code into ${f.line}`)
+      }
+    }
+    return said
+  },
+})
+
 /**
- * Has the browser fill a sign-in from its saved passwords: `account` is words in its suggestion
- * (the username, usually); without it, the one it offers, or the list when it offers several.
+ * Fills a sign-in, page after page: from the stored account `account` names, else from the
+ * browser's saved passwords (`account` then is words in its suggestion).
  */
 export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
-  let pick =
+  const named =
     typeof args.account === "string" && args.account.trim() !== "" ? args.account.trim() : null
   const otp = typeof args.otp === "string" && args.otp.trim() !== "" ? args.otp.trim() : null
   const submit = args.submit !== false
   const { url } = await tab.info()
-  const host = hostOf(url)
+  const host = accounts.hostOf(url)
+  const stored = named === null ? undefined : accounts.list()[named]
+  let source: Source
+  let username: string | undefined
+  const browser = fromBrowser(stored ? null : named, host)
+  if (stored && named !== null) {
+    accounts.allows(stored.sites, url)
+    const secret = stored.password || stored.totp ? await accounts.secrets(named) : {}
+    source = fromStore(named, stored, secret)
+    ;({ username } = stored)
+  } else {
+    source = browser
+  }
   const steps: string[] = []
   const filled = new Set<string>()
   const sentFields = new Set<number>()
+  let picked = false
   let ending = ""
+  const wants = (f: Field) =>
+    !filled.has(f.kind) && (source.has(f.kind) || (f.kind === "code" && otp !== null))
   for (let round = 0; round < ROUNDS; round += 1) {
     // After the first page, the next one's fields may come a beat after the last one's went.
     const started = Date.now()
     let found = fieldsOf(await tab.page("signin()"))
-    const todo = () =>
-      found.filter(
-        (f) =>
-          (f.kind === "username" || f.kind === "password" || (f.kind === "code" && otp !== null)) &&
-          !filled.has(f.kind),
-      )
     const wait = round > 0 ? NEXT_PAGE : 0
-    while (todo().length === 0 && Date.now() - started < wait) {
+    while (!found.some(wants) && Date.now() - started < wait) {
       await Bun.sleep(250)
       found = fieldsOf(await tab.page("signin()"))
     }
-    const left = todo()
+    // One field of each kind, the first (sign-in forms come before a footer's newsletter box).
+    const left = ["username", "password", "code"].flatMap((k) => {
+      const f = found.find((x) => x.kind === k && wants(x))
+      return f ? [f] : []
+    })
     if (left.length === 0) {
       const refused = ["password", "code"].filter(
         (k) => filled.has(k) && found.some((f) => f.kind === k && sentFields.has(f.n)),
@@ -137,17 +258,32 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       if (refused.length > 0) {
         ending = `The page still shows the ${refused.join(" and ")} field after it was sent, so it was likely refused or didn't go; I didn't fill it again (that can lock an account). Read the page for why.`
       } else if (found.some((f) => f.kind === "code")) {
-        await chrome
-          .call("hold", { session: tab.name, until: Date.now() + 3_600_000 }, 10_000)
-          .catch(() => null)
+        await hold(tab.name, Date.now() + 3_600_000).catch(() => null)
         const asked = await actionItem(
           `${host} code`,
-          `The sign-in to ${host} is filled from your saved password and sent; it sent you a one-time code by text, email or app. Reply with the code and I'll finish signing in.`,
+          `The sign-in to ${host} is filled and sent; it sent you a one-time code by text, email or app. Reply with the code and I'll finish signing in.`,
           typeof args.space === "string" ? args.space : "Home",
         )
         ending = `The page asks for a one-time code. ${asked ? "The user is asked for it with an action item" : "Ask the user for it with an action item"} (or find it in their texts or email), then sign_in with otp. The tab is held for an hour.`
       } else if (found.some((f) => f.kind === "new password")) {
-        ending = "The page wants a new password: that's the user's to set."
+        ending =
+          "The page wants a new password: save_account with password: generate makes one, puts it in and keeps it."
+      } else if (round === 0 && !picked && username !== undefined) {
+        // An account picker: the tile for this account, once.
+        const tile = num(await tab.page(`chooser(${JSON.stringify(username)})`).catch(() => null))
+        if (tile === null) {
+          throw new Error(
+            `There's no sign-in field here that ${source.who} can fill: open its sign-in page first`,
+          )
+        }
+        const at = await tab.point(tile)
+        const what = await whatAt(tab, at)
+        const since = Date.now()
+        await tab.clickAt(at)
+        await tab.settle(since)
+        picked = true
+        steps.push(`chose ${what} on the account picker`)
+        continue
       } else if (round === 0) {
         throw new Error("There's no sign-in field here: open the site's sign-in page first")
       } else {
@@ -156,40 +292,20 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       break
     }
     const said: string[] = []
-    const code = left.find((f) => f.kind === "code")
-    const credential = left.find((f) => f.kind === "username" || f.kind === "password")
-    if (credential) {
-      const at = await tab.point(credential.n)
-      if (pick === null) {
-        // The one saved sign-in the browser offers here, else the list to choose from.
-        const offered = await browserFills(tab, at, null)
-        const [only, ...more] = offered.labels
-        if (only === undefined || more.length > 0) {
-          return done(
-            `The browser offers these saved sign-ins for ${host}:\n${offered.labels.map((l) => `- ${l}`).join("\n")}\nsign_in again with account: words from one.`,
-          )
-        }
-        pick = only
+    const mine = left.filter((f) => source.has(f.kind))
+    try {
+      said.push(...(await source.fill(tab, mine)))
+    } catch (error) {
+      if (error instanceof OffersError) {
+        return done(error.message)
       }
-      const offered = await browserFills(tab, at, pick)
-      await Bun.sleep(400)
-      for (const f of left.filter((x) => x.kind === "username" || x.kind === "password")) {
-        const held = await lengthOf(tab, f)
-        if (held > 0) {
-          filled.add(f.kind)
-          said.push(
-            f.kind === "password"
-              ? `the password into ${f.line} (${held} characters)`
-              : `the username into ${f.line}`,
-          )
-        }
-      }
-      if (said.length === 0) {
-        throw new Error(
-          `The browser chose "${offered.chose ?? pick}" but the fields still read empty: it may be asking to verify it's the user (Touch ID or the Mac's password); look at a screenshot`,
-        )
-      }
-    } else if (code && otp !== null) {
+      throw error
+    }
+    for (const f of mine) {
+      filled.add(f.kind)
+    }
+    const code = left.find((f) => f.kind === "code" && !source.has("code"))
+    if (code && otp !== null) {
       const held = await putCode(tab, code, otp)
       if (held === 0) {
         throw new Error(`${code.line} still reads empty after filling the code: look at the page`)
@@ -197,7 +313,7 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       filled.add("code")
       said.push(`the one-time code into ${code.line}`)
     }
-    const last = left.findLast((f) => filled.has(f.kind)) ?? left[0]
+    const last = left.at(-1)
     if (!last) {
       break
     }
@@ -212,8 +328,210 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
     steps.push(`filled ${said.join(", ")}, then ${await send(tab, last)}`)
     await movedOn(tab, left)
   }
+  if (stored && named !== null) {
+    accounts.touch(named)
+  }
+  const pick = browser.pick()
+  let { who } = source
+  if (source === browser && pick !== null) {
+    who = `the saved sign-in "${pick}"`
+  }
   const list = steps.map((s) => `- ${s}`).join("\n")
+  return done(`Signing in to ${host} with ${who}:\n${list}\n${ending}\n${await nowOn(tab)}`)
+}
+
+const holds = (a: Account) => {
+  if (a.password && a.totp) {
+    return "a password and an authenticator key"
+  }
+  if (a.password) {
+    return "a password"
+  }
+  return a.totp ? "an authenticator key" : "nothing secret yet"
+}
+
+/** What an element (or the page) shows of a password or key, for the Keychain and nothing else. */
+const revealed = async (tab: Tab, n: number | null) => {
+  const value = str(
+    await tab.page(n === null ? "reveal(null)" : `reveal(${n}, ${tab.known(n)})`),
+  ).trim()
+  if (value === "") {
+    throw new Error("There's nothing there to keep")
+  }
+  return value
+}
+
+/**
+ * Keeps an account on this Mac, or changes one: its username, its sites, its password (generated and
+ * put in the page's new-password fields, read from the page, or from a file here) and its
+ * authenticator key (from the page or a file).
+ */
+export const saveAccount = async (tab: Tab, args: Json, element: number | null): Promise<Done> => {
+  const name = str(args.account).trim()
+  accounts.checkName(name)
+  const before = accounts.list()[name]
+  const a: Account = before
+    ? { ...before, sites: [...before.sites] }
+    : { sites: [], password: false, totp: false, saved: 0 }
+  const secret: Secrets =
+    before && (before.password || before.totp) ? await accounts.secrets(name) : {}
+  const passwordFrom = str(args.password).trim()
+  const totpFrom = str(args.totp).trim()
+  if (passwordFrom === "page" && totpFrom === "page") {
+    throw new Error("One thing comes from the page per call: keep the password, then the key")
+  }
+  const onPage = passwordFrom === "page" || totpFrom === "page" || passwordFrom === "generate"
+  let url: string | null = null
+  if (onPage) {
+    await tab.ensure()
+    tab.noDialog()
+    ;({ url } = await tab.info())
+  }
+  if (typeof args.username === "string") {
+    const u = args.username.trim()
+    if (u === "") {
+      delete a.username
+    } else {
+      a.username = u
+    }
+  }
+  if (Array.isArray(args.sites)) {
+    a.sites = args.sites.filter((x) => typeof x === "string").map(accounts.site)
+  }
+  if (a.sites.length === 0) {
+    if (url === null) {
+      throw new Error(`Give sites: the domains ${name} may be filled on, like ["example.com"]`)
+    }
+    a.sites = [accounts.site(url)]
+  }
+  if (url !== null) {
+    accounts.allows(a.sites, url)
+  }
+  const said: string[] = []
+  if (passwordFrom === "none") {
+    delete secret.password
+    said.push("took its password away")
+  } else if (passwordFrom === "generate") {
+    const length = num(args.length) ?? 20
+    const fresh = accounts.generate(length)
+    const found = fieldsOf(await tab.page("signin()"))
+    let into = found.filter((f) => f.kind === "new password")
+    if (into.length === 0) {
+      into = found.filter((f) => f.kind === "password" && f.length === 0)
+    }
+    if (into.length === 0) {
+      throw new Error(
+        "There's no new-password field on this page: open the sign-up or change-password form first",
+      )
+    }
+    // Kept before it goes in, so a page that fails halfway never loses it; the one before stays as previous.
+    if (secret.password !== undefined) {
+      secret.previous = secret.password
+    }
+    secret.password = fresh
+    await accounts.save(
+      name,
+      { ...a, password: true, totp: secret.totp !== undefined, saved: Date.now() },
+      secret,
+    )
+    for (const f of into) {
+      const held = await tab.fillHidden(f.n, fresh)
+      if (held !== length) {
+        throw new Error(
+          `${f.line} holds ${held} characters, not ${length}: the site may cap passwords shorter (try length); the generated one is kept as ${name}'s password`,
+        )
+      }
+    }
+    said.push(
+      `generated a ${length}-character password and filled it into ${into.map((f) => f.line).join(" and ")}`,
+    )
+  } else if (passwordFrom === "page") {
+    if (element === null) {
+      throw new Error("Name the field or element that shows the password (element or match)")
+    }
+    secret.password = await revealed(tab, element)
+    said.push(`kept the password the page shows (${secret.password.length} characters)`)
+  } else if (passwordFrom.startsWith("/") || passwordFrom.startsWith("~")) {
+    const file = passwordFrom.startsWith("~")
+      ? `${process.env.HOME}${passwordFrom.slice(1)}`
+      : passwordFrom
+    const read = await Bun.file(file).text()
+    const password = read.replace(/[\r\n]+$/u, "")
+    if (password === "") {
+      throw new Error(`${passwordFrom} is empty`)
+    }
+    secret.password = password
+    said.push(
+      `kept the password in ${passwordFrom} (${password.length} characters; delete that file now that the Keychain has it)`,
+    )
+  } else if (passwordFrom !== "" && passwordFrom !== "keep") {
+    throw new Error("password is generate, page, a file's path on this Mac, keep or none")
+  }
+  if (totpFrom === "none") {
+    delete secret.totp
+    said.push("took its authenticator key away")
+  } else if (totpFrom === "page") {
+    const shown = await revealed(tab, element)
+    secret.totp = accounts.parseTotp(shown, element === null)
+    said.push(
+      `kept the authenticator key the page shows (${secret.totp.digits} digits every ${secret.totp.period} s)`,
+    )
+  } else if (totpFrom.startsWith("/") || totpFrom.startsWith("~")) {
+    const file = totpFrom.startsWith("~") ? `${process.env.HOME}${totpFrom.slice(1)}` : totpFrom
+    secret.totp = accounts.parseTotp(await Bun.file(file).text())
+    said.push(
+      `kept the authenticator key in ${totpFrom} (delete that file now that the Keychain has it)`,
+    )
+  } else if (totpFrom !== "" && totpFrom !== "keep") {
+    throw new Error("totp is page, a file's path on this Mac, keep or none")
+  }
+  const saved: Account = {
+    ...a,
+    password: secret.password !== undefined,
+    totp: secret.totp !== undefined,
+    saved: Date.now(),
+  }
+  await accounts.save(name, saved, secret)
+  let text = `Saved ${name}: ${saved.username ?? "no username"}, for ${saved.sites.join(", ")}; it holds ${holds(saved)}.`
+  if (said.length > 0) {
+    text += ` I ${said.join("; ")}.`
+  }
+  text += ` sign_in {account: "${name}"} fills it on those sites; nothing secret ever comes back.`
+  return done(url === null ? text : `${text}\n${await nowOn(tab)}`)
+}
+
+/** How long ago a moment was, in words. */
+const ago = (at: number) => {
+  const minutes = Math.floor((Date.now() - at) / 60_000)
+  if (minutes < 1) {
+    return "just now"
+  }
+  if (minutes < 60) {
+    return `${minutes} min ago`
+  }
+  return minutes < 2880
+    ? `${Math.floor(minutes / 60)} h ago`
+    : `${Math.floor(minutes / 1440)} days ago`
+}
+
+/** This Mac's stored accounts, or with forget, one taken away. */
+export const listAccounts = async (args: Json): Promise<Done> => {
+  if (args.forget === true) {
+    const name = str(args.account).trim()
+    await accounts.forget(name)
+    return done(`Forgot ${name}: its Keychain item is deleted, and sign_in can't fill it anymore.`)
+  }
+  const all = Object.entries(accounts.list())
+  if (all.length === 0) {
+    return done(
+      "This Mac has no stored accounts. save_account keeps one; sign_in without one fills from the browser's saved passwords.",
+    )
+  }
+  const lines = all.map(
+    ([name, a]) =>
+      `- ${name}: ${a.username ?? "no username"}, for ${a.sites.join(", ")}; ${holds(a)}; saved ${ago(a.saved)}${a.used === undefined ? "" : `, last filled ${ago(a.used)}`}`,
+  )
   return done(
-    `Signing in to ${host}${pick === null ? "" : ` with the saved sign-in "${pick}"`}:\n${list}\n${ending}\n${await nowOn(tab)}`,
+    `This Mac's stored accounts (sign_in {account} fills one on its sites):\n${lines.join("\n")}`,
   )
 }

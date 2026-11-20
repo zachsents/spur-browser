@@ -1,6 +1,6 @@
 // Switch's browser spur in Chrome (or another Chromium browser), over native messaging to the spur
-// on this Mac: agents drive tabs here through the debugger (hands.js). Ported from Switchboard's
-// extension, hands only.
+// on this Mac. Eyes: it reports the page in front, and whether an agent is driving it. Hands
+// (hands.js): agents drive tabs here through the debugger. Ported from Switchboard's extension.
 
 importScripts("hands.js")
 
@@ -41,6 +41,38 @@ chrome.alarms
 function emit(message) {
   port?.postMessage(message)
 }
+
+/**
+ * Whether an agent is driving the tab: browser agents keep their tabs in a tab group with a
+ * debugger attached. DevTools attaches one too, so the group is what tells the person's own tabs apart.
+ */
+async function driven(tab) {
+  if (tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) return false
+  const targets = await chrome.debugger.getTargets()
+  return targets.some((target) => target.tabId === tab.id && target.attached)
+}
+
+/** Says what's in front; when none of the windows it can see is focused, it says so instead. */
+async function report() {
+  if (!port) return
+  const window = await chrome.windows.getLastFocused().catch(() => null)
+  if (!window?.focused) return emit({ type: "page", hidden: true })
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  if (tab)
+    emit({
+      type: "page",
+      url: tab.url || "",
+      title: tab.title || "",
+      agent: await driven(tab),
+      hidden: false,
+    })
+}
+
+chrome.tabs.onActivated.addListener(report)
+chrome.tabs.onUpdated.addListener((_, change) => {
+  if (change.url || change.title || change.groupId !== undefined) report()
+})
+chrome.windows.onFocusChanged.addListener(report)
 
 /** Reloads from the files on disk, at most once in ten minutes, so files that failed to update can't loop it. */
 async function reloadOnce() {

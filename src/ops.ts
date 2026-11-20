@@ -7,10 +7,12 @@ import path from "node:path"
 import * as chrome from "./chrome.ts"
 import type { Json } from "./chrome.ts"
 import { isJson } from "./chrome.ts"
-import { browserFills, done, nowOn, num, str, whatAt } from "./common.ts"
+import { browserFills, done, hold, nowOn, num, str, whatAt } from "./common.ts"
 import type { Decide, Done } from "./common.ts"
 import { redact, redactUrl, refusal, secretText } from "./guard.ts"
-import { signIn } from "./signin.ts"
+import { fillSecret } from "./secrets.ts"
+import { listAccounts, saveAccount, signIn } from "./signin.ts"
+import { noteHeld } from "./session.ts"
 import { describe, line, listed, modifierBits, parseKey } from "./tab.ts"
 import type { Tab } from "./tab.ts"
 
@@ -24,6 +26,9 @@ export const OPS = [
   "set",
   "autofill",
   "sign_in",
+  "fill_secret",
+  "save_account",
+  "accounts",
   "key",
   "hover",
   "scroll",
@@ -49,7 +54,17 @@ export const OPS = [
 ] as const
 
 /** Ops about the session rather than its page: they don't open a tab. */
-const SESSION_OPS = new Set(["console", "network", "tabs", "attach", "show", "hold", "release"])
+const SESSION_OPS = new Set([
+  "console",
+  "network",
+  "tabs",
+  "attach",
+  "show",
+  "hold",
+  "release",
+  "accounts",
+  "save_account",
+])
 
 /** What fits in an agent's tool result, with room to spare. */
 const MAX_TEXT = 24_000
@@ -601,6 +616,19 @@ const one = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
     case "sign_in": {
       return await signIn(tab, args)
     }
+    case "fill_secret": {
+      return await fillSecret(tab, args, await elementOf(tab, args, "fill_secret"))
+    }
+    case "save_account": {
+      return await saveAccount(
+        tab,
+        args,
+        targeted(args) ? await elementOf(tab, args, "save_account") : null,
+      )
+    }
+    case "accounts": {
+      return await listAccounts(args)
+    }
     case "key": {
       const keys = need(args, "keys", "key")
       const presses = keys.split(/\s+/u).filter(Boolean).map(parseKey)
@@ -759,11 +787,7 @@ const one = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
     }
     case "hold": {
       const hours = Math.min(Math.max(num(args.hours) ?? 24, 0.1), 72)
-      await chrome.call(
-        "hold",
-        { session: tab.name, until: Date.now() + hours * 3_600_000 },
-        10_000,
-      )
+      await hold(tab.name, Date.now() + hours * 3_600_000)
       return done(
         `The tab stays open for ${hours} hours (or until released), for whatever waits on it.`,
       )
@@ -771,6 +795,7 @@ const one = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
     case "release": {
       const keep = args.keep === true
       await chrome.call("release", { session: tab.name, keepOpen: keep }, 15_000)
+      noteHeld(tab.name, 0)
       tab.s.forget()
       return done(
         keep

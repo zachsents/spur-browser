@@ -64,3 +64,17 @@ export const dropSession = (name: string) => {
 chrome.onEvent((name, method, params) => {
   session(name).log.apply(method, params)
 })
+
+/** The sessions held for the user (an approval, a code, a human check), newest last, with until when. */
+const held = new Map<string, number>()
+
+export const noteHeld = (name: string, until: number) => {
+  held.delete(name)
+  held.set(name, until)
+}
+
+/** The newest session still held, if any. */
+export const newestHeld = () => {
+  const now = Date.now()
+  return [...held.entries()].findLast(([, until]) => until > now)?.[0] ?? null
+}

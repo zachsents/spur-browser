@@ -8,11 +8,10 @@
 // run.rs, itself grown from Agent Quick Browse.
 import type { ModelAnswer } from "spur-kit"
 
-import * as chrome from "./chrome.ts"
 import type { Json } from "./chrome.ts"
 import { isJson } from "./chrome.ts"
 import { redactUrl, secretText } from "./guard.ts"
-import { done, str } from "./common.ts"
+import { done, hold, str } from "./common.ts"
 import type { Decide, Done } from "./common.ts"
 import { attachFiles, realFile } from "./ops.ts"
 import { describe, line, loosely, parseKey } from "./tab.ts"
@@ -564,9 +563,7 @@ export const run = async (tab: Tab, args: Json, decide: Decide): Promise<Done> =
   const n = r.history.length
   let text = `${ended.status} after ${n} step${n === 1 ? "" : "s"} in ${((Date.now() - started) / 1000).toFixed(1)}s${ended.reason === null ? "" : `: ${ended.reason}`}\nNow on: ${title === "" ? "(untitled)" : title} — ${redactUrl(url)}\n`
   if (ended.pending !== null) {
-    await chrome
-      .call("hold", { session: tab.name, until: Date.now() + 24 * 3_600_000 }, 10_000)
-      .catch(() => null)
+    await hold(tab.name, Date.now() + 24 * 3_600_000).catch(() => null)
     text += `Stopped before: ${ended.pending.step}. The decision model judged it would commit something, and the tab stays open for a day. If the user asked for exactly this, run again with approved: true; otherwise ask the user for approval, and on it call act with:\n${JSON.stringify(ended.pending.call)}\n`
   }
   if (r.log.length > 0) {

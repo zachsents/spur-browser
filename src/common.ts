@@ -5,6 +5,7 @@ import type { Decision, Input, Question } from "spur-kit"
 import * as autofill from "./autofill.ts"
 import * as chrome from "./chrome.ts"
 import { redactUrl } from "./guard.ts"
+import { noteHeld } from "./session.ts"
 import type { Tab } from "./tab.ts"
 
 export type Decide = (
@@ -74,4 +75,10 @@ export const browserFills = async (tab: Tab, at: { x: number; y: number }, pick:
   } finally {
     await chrome.call("hide", { session: tab.name }, 10_000).catch(() => null)
   }
+}
+
+/** Keeps a session's tab open (no idle close) until a time, for the user: its view shows it. */
+export const hold = async (session: string, until: number) => {
+  await chrome.call("hold", { session, until }, 10_000)
+  noteHeld(session, until)
 }
