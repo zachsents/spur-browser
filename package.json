@@ -1,10 +1,14 @@
 {
   "name": "spur-browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "This machine's Chrome, driven by Agent Quick Browse, as a Switch spur.",
+  "description": "This Mac's own browser, signed in as the user is there, as a Switch spur: background tabs, a decision model's runs, and sign-in from the browser's saved passwords.",
   "license": "MIT",
   "repository": "github:zachsents/spur-browser",
+  "files": [
+    "src",
+    "extension"
+  ],
   "type": "module",
   "scripts": {
     "start": "bun src/main.ts",
@@ -15,7 +19,10 @@
     "check": "bun run typecheck && bun run fix"
   },
   "dependencies": {
-    "agent-quick-browse": "^0.5.0"
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/server": "^2.4.0",
+    "effect": "^4.1.5",
+    "spur-kit": "github:zachsents/spur-kit#c1f0e50"
   },
   "devDependencies": {
     "@types/bun": "^1.4.5",
