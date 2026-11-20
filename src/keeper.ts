@@ -22,7 +22,13 @@ const call = async (tool: string, args: Json): Promise<Json> => {
   try {
     r = await fetch(`${core()}/widgets/secrets/${tool}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        // The spur's own credential, when its host gives it one.
+        ...(process.env.SWITCH_TOKEN !== undefined && {
+          authorization: `Bearer ${process.env.SWITCH_TOKEN}`,
+        }),
+      },
       body: JSON.stringify(args),
       signal: AbortSignal.timeout(30_000),
     })
