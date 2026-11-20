@@ -2,7 +2,7 @@
 
 This machine's Chrome, driven through Agent Quick Browse's MCP server as it is: navigating, reading pages, clicking and typing in background tabs, with the user's own sign-ins. A plain MCP server: no events or widgets.
 
-A [Switch](https://switch.ax) spur, built on [spur-kit](https://github.com/zachsents/spur-kit).
+A [Switch](https://switch.ax) spur: a plain MCP server with a spur manifest ([spur-kit](https://github.com/zachsents/spur-kit)).
 
 ## Install
 
