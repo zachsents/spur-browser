@@ -66,7 +66,7 @@ export const secretText = (text: string) => {
 
 /** Why a field of this kind (the page script's `sensitive`) is refused. */
 export const refusal = (sensitive: string) =>
-  `That's a ${sensitive} field, and you never type passwords, payment or identity numbers: sign_in fills a sign-in (a stored account, else the browser's saved passwords), fill_secret one of this Mac's kept secrets, and autofill what the browser has saved (a card, an address); a one-time code goes in with sign_in's otp`
+  `That's a ${sensitive} field, and you never type passwords, payment or identity numbers: sign_in fills a sign-in (a login in the vault, else the browser's saved passwords), fill_secret one of the vault's secrets, and autofill what the browser has saved (a card, an address); a one-time code goes in with sign_in's otp`
 
 /** `text` with the secrets it shows masked. */
 export const redact = (text: string) => {

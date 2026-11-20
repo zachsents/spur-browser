@@ -1,13 +1,14 @@
 // Signing in. `sign_in` fills a sign-in page's username and password, page after page (email, then
-// password), and sends each on: from one of this Mac's stored accounts when `account` names one
-// (accounts.ts), else the browser fills them itself from its saved passwords (its own suggestions,
-// picked through Accessibility). A page asking for a one-time code is filled from `otp`, or a stored
-// account's authenticator key; without either, the user is asked for it with an action item and the
+// password), and sends each on: from a login in the user's vault when `account` names one, or when
+// the vault has just one for the site (keeper.ts), else the browser fills them itself from its saved passwords (its own suggestions,
+// picked through Accessibility). A page asking for a one-time code is filled from `otp`, or the
+// login's authenticator code; without either, the user is asked for it with an action item and the
 // tab is held for it. A field still there after it was sent is reported, never retried. Nothing
 // secret ever passes through here: what was filled is said by how many characters it holds.
-// `save_account` keeps an account; `accounts` lists them. Ported from Switchboard's signin.rs.
+// `save_account` keeps a login in the vault; `accounts` lists them. Ported from Switchboard's signin.rs.
 import * as accounts from "./accounts.ts"
-import type { Account, Secrets } from "./accounts.ts"
+import * as keeper from "./keeper.ts"
+import type { Outline } from "./keeper.ts"
 import type { Json } from "./chrome.ts"
 import { isJson } from "./chrome.ts"
 import { actionItem } from "./core.ts"
@@ -171,44 +172,73 @@ const fromBrowser = (
   }
 }
 
-/** One of this Mac's stored accounts. */
-const fromStore = (name: string, a: Account, secret: Secrets): Source => ({
-  who: a.username === undefined ? name : `${name} (${a.username})`,
-  has: (kind) =>
-    (kind === "username" && a.username !== undefined) ||
-    (kind === "password" && secret.password !== undefined) ||
-    (kind === "code" && secret.totp !== undefined),
-  fill: async (tab, fields) => {
-    const said: string[] = []
-    for (const f of fields) {
-      if (f.kind === "username" && a.username !== undefined) {
-        await tab.fill(f.n, a.username)
-        said.push(`the username into ${f.line}`)
-      } else if (f.kind === "password" && secret.password !== undefined) {
-        const held = await tab.fillHidden(f.n, secret.password)
-        const wanted = secret.password.length
-        if (held !== wanted) {
-          throw new Error(
-            `${f.line} holds ${held} characters after filling the password, not ${wanted}: the field cuts or changes it; look at the page`,
-          )
+/** A login in the vault: each page's secrets released for that page alone. */
+const fromVault = (login: Outline): Source => {
+  const username = keeper.plain(login, "username")
+  return {
+    who: username === undefined ? login.name : `${login.name} (${username})`,
+    has: (kind) =>
+      (kind === "username" && username !== undefined) ||
+      (kind === "password" && keeper.holds(login, "password")) ||
+      (kind === "code" && keeper.holds(login, "totp")),
+    fill: async (tab, fields) => {
+      const wanted = fields.map(
+        (f) => ({ username: "username", password: "password", code: "totp" })[f.kind] ?? "",
+      )
+      const needs = wanted.filter((w) => w === "password" || w === "totp")
+      const page = await tab.info()
+      const released =
+        needs.length > 0 ? await keeper.release({ item: login.id }, page.url, needs) : null
+      const secret = released?.values ?? {}
+      const said: string[] = []
+      for (const f of fields) {
+        const { password } = secret
+        const code = secret.totp
+        if (f.kind === "username" && username !== undefined) {
+          await tab.fill(f.n, username)
+          said.push(`the username into ${f.line}`)
+        } else if (f.kind === "password" && password !== undefined) {
+          const held = await tab.fillHidden(f.n, password)
+          if (held !== password.length) {
+            throw new Error(
+              `${f.line} holds ${held} characters after filling the password, not ${password.length}: the field cuts or changes it; look at the page`,
+            )
+          }
+          said.push(`the password into ${f.line} (${held} characters)`)
+        } else if (f.kind === "code" && code !== undefined) {
+          const held = await putCode(tab, f, code)
+          if (held === 0) {
+            throw new Error(
+              `${f.line} still reads empty after filling the authenticator code: look at the page`,
+            )
+          }
+          said.push(`the authenticator code into ${f.line}`)
         }
-        said.push(`the password into ${f.line} (${held} characters)`)
-      } else if (f.kind === "code" && secret.totp !== undefined) {
-        const held = await putCode(tab, f, await accounts.currentCode(secret.totp))
-        if (held === 0) {
-          throw new Error(
-            `${f.line} still reads empty after filling the authenticator code: look at the page`,
-          )
-        }
-        said.push(`the authenticator code into ${f.line}`)
       }
+      return said
+    },
+  }
+}
+
+/** The vault's login `named` names, else its one login for this page; none without a vault. */
+const vaultLogin = async (named: string | null, url: string): Promise<Outline | null> => {
+  try {
+    if (named !== null) {
+      const found = await keeper.item(named)
+      return found?.kind === "login" ? found : null
     }
-    return said
-  },
-})
+    const here = await keeper.list({ kind: "login", url })
+    return here.length === 1 ? (here[0] ?? null) : null
+  } catch (error) {
+    if (error instanceof keeper.VaultMissingError) {
+      return null
+    }
+    throw error
+  }
+}
 
 /**
- * Fills a sign-in, page after page: from the stored account `account` names, else from the
+ * Fills a sign-in, page after page: from the vault's login `account` names, else from the
  * browser's saved passwords (`account` then is words in its suggestion).
  */
 export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
@@ -218,18 +248,10 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
   const submit = args.submit !== false
   const { url } = await tab.info()
   const host = accounts.hostOf(url)
-  const stored = named === null ? undefined : accounts.list()[named]
-  let source: Source
-  let username: string | undefined
+  const stored = await vaultLogin(named, url)
   const browser = fromBrowser(stored ? null : named, host)
-  if (stored && named !== null) {
-    accounts.allows(stored.sites, url)
-    const secret = stored.password || stored.totp ? await accounts.secrets(named) : {}
-    source = fromStore(named, stored, secret)
-    ;({ username } = stored)
-  } else {
-    source = browser
-  }
+  const source: Source = stored ? fromVault(stored) : browser
+  const username = stored ? keeper.plain(stored, "username") : undefined
   const steps: string[] = []
   const filled = new Set<string>()
   const sentFields = new Set<number>()
@@ -328,9 +350,6 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
     steps.push(`filled ${said.join(", ")}, then ${await send(tab, last)}`)
     await movedOn(tab, left)
   }
-  if (stored && named !== null) {
-    accounts.touch(named)
-  }
   const pick = browser.pick()
   let { who } = source
   if (source === browser && pick !== null) {
@@ -340,17 +359,19 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
   return done(`Signing in to ${host} with ${who}:\n${list}\n${ending}\n${await nowOn(tab)}`)
 }
 
-const holds = (a: Account) => {
-  if (a.password && a.totp) {
+const holdsWhat = (o: Outline) => {
+  const password = keeper.holds(o, "password")
+  const totp = keeper.holds(o, "totp")
+  if (password && totp) {
     return "a password and an authenticator key"
   }
-  if (a.password) {
+  if (password) {
     return "a password"
   }
-  return a.totp ? "an authenticator key" : "nothing secret yet"
+  return totp ? "an authenticator key" : "nothing secret yet"
 }
 
-/** What an element (or the page) shows of a password or key, for the Keychain and nothing else. */
+/** What an element (or the page) shows of a password or key, for the vault and nothing else. */
 const revealed = async (tab: Tab, n: number | null) => {
   const value = str(
     await tab.page(n === null ? "reveal(null)" : `reveal(${n}, ${tab.known(n)})`),
@@ -361,20 +382,26 @@ const revealed = async (tab: Tab, n: number | null) => {
   return value
 }
 
+const field = (id: string, label: string, type: string, value: string): keeper.DraftField => ({
+  id,
+  label,
+  type,
+  value,
+})
+
+/** A file's text, a path on this Mac (~ for home). */
+const fileText = async (given: string) =>
+  await Bun.file(given.startsWith("~") ? `${process.env.HOME}${given.slice(1)}` : given).text()
+
 /**
- * Keeps an account on this Mac, or changes one: its username, its sites, its password (generated and
- * put in the page's new-password fields, read from the page, or from a file here) and its
- * authenticator key (from the page or a file).
+ * Keeps a login in the vault, or changes one: its username, its sites, its password (generated by
+ * the vault and put in the page's new-password fields, read from the page, or from a file here) and
+ * its authenticator key (from the page or a file).
  */
 export const saveAccount = async (tab: Tab, args: Json, element: number | null): Promise<Done> => {
   const name = str(args.account).trim()
   accounts.checkName(name)
-  const before = accounts.list()[name]
-  const a: Account = before
-    ? { ...before, sites: [...before.sites] }
-    : { sites: [], password: false, totp: false, saved: 0 }
-  const secret: Secrets =
-    before && (before.password || before.totp) ? await accounts.secrets(name) : {}
+  const before = await keeper.item(name)
   const passwordFrom = str(args.password).trim()
   const totpFrom = str(args.totp).trim()
   if (passwordFrom === "page" && totpFrom === "page") {
@@ -387,33 +414,76 @@ export const saveAccount = async (tab: Tab, args: Json, element: number | null):
     tab.noDialog()
     ;({ url } = await tab.info())
   }
-  if (typeof args.username === "string") {
-    const u = args.username.trim()
-    if (u === "") {
-      delete a.username
-    } else {
-      a.username = u
-    }
-  }
+  let sites = before ? before.urls.map((u) => accounts.site(u)) : []
   if (Array.isArray(args.sites)) {
-    a.sites = args.sites.filter((x) => typeof x === "string").map(accounts.site)
+    sites = args.sites.filter((x) => typeof x === "string").map(accounts.site)
   }
-  if (a.sites.length === 0) {
+  if (sites.length === 0) {
     if (url === null) {
       throw new Error(`Give sites: the domains ${name} may be filled on, like ["example.com"]`)
     }
-    a.sites = [accounts.site(url)]
+    sites = [accounts.site(url)]
   }
   if (url !== null) {
-    accounts.allows(a.sites, url)
+    accounts.allows(sites, url)
+  }
+  const fields: keeper.DraftField[] = []
+  if (typeof args.username === "string") {
+    fields.push(field("username", "Username", "text", args.username.trim()))
   }
   const said: string[] = []
+  let generated: { length: number } | null = null
   if (passwordFrom === "none") {
-    delete secret.password
+    fields.push(field("password", "Password", "password", ""))
     said.push("took its password away")
   } else if (passwordFrom === "generate") {
-    const length = num(args.length) ?? 20
-    const fresh = accounts.generate(length)
+    generated = { length: num(args.length) ?? 20 }
+  } else if (passwordFrom === "page") {
+    if (element === null) {
+      throw new Error("Name the field or element that shows the password (element or match)")
+    }
+    const shown = await revealed(tab, element)
+    fields.push(field("password", "Password", "password", shown))
+    said.push(`kept the password the page shows (${shown.length} characters)`)
+  } else if (passwordFrom.startsWith("/") || passwordFrom.startsWith("~")) {
+    const read = await fileText(passwordFrom)
+    const password = read.replace(/[\r\n]+$/u, "")
+    if (password === "") {
+      throw new Error(`${passwordFrom} is empty`)
+    }
+    fields.push(field("password", "Password", "password", password))
+    said.push(
+      `kept the password in ${passwordFrom} (${password.length} characters; delete that file now that the vault has it)`,
+    )
+  } else if (passwordFrom !== "" && passwordFrom !== "keep") {
+    throw new Error("password is generate, page, a file's path on this Mac, keep or none")
+  }
+  if (totpFrom === "none") {
+    fields.push(field("totp", "One-time code", "totp", ""))
+    said.push("took its authenticator key away")
+  } else if (totpFrom === "page" || totpFrom.startsWith("/") || totpFrom.startsWith("~")) {
+    const fromPage = totpFrom === "page"
+    const t = fromPage
+      ? accounts.parseTotp(await revealed(tab, element), element === null)
+      : accounts.parseTotp(await fileText(totpFrom))
+    fields.push(field("totp", "One-time code", "totp", accounts.otpauth(t)))
+    said.push(
+      fromPage
+        ? `kept the authenticator key the page shows (${t.digits} digits every ${t.period} s)`
+        : `kept the authenticator key in ${totpFrom} (delete that file now that the vault has it)`,
+    )
+  } else if (totpFrom !== "" && totpFrom !== "keep") {
+    throw new Error("totp is page, a file's path on this Mac, keep or none")
+  }
+  let saved = await keeper.deposit({
+    kind: "login",
+    name,
+    title: before?.title ?? sites[0] ?? name,
+    fields,
+    urls: sites.map((site) => ({ url: `https://${site}` })),
+    ...(before && { into: before.id }),
+  })
+  if (generated !== null && url !== null) {
     const found = fieldsOf(await tab.page("signin()"))
     let into = found.filter((f) => f.kind === "new password")
     if (into.length === 0) {
@@ -424,79 +494,31 @@ export const saveAccount = async (tab: Tab, args: Json, element: number | null):
         "There's no new-password field on this page: open the sign-up or change-password form first",
       )
     }
-    // Kept before it goes in, so a page that fails halfway never loses it; the one before stays as previous.
-    if (secret.password !== undefined) {
-      secret.previous = secret.password
-    }
-    secret.password = fresh
-    await accounts.save(
-      name,
-      { ...a, password: true, totp: secret.totp !== undefined, saved: Date.now() },
-      secret,
-    )
+    // Kept before it goes in, so a page that fails halfway never loses it; the one before stays in its history.
+    saved = await keeper.save({
+      item: saved.id,
+      generate: { field: "password", length: generated.length },
+    })
+    const released = await keeper.release({ item: saved.id }, url, ["password"])
+    const { password = "" } = released.values
     for (const f of into) {
-      const held = await tab.fillHidden(f.n, fresh)
-      if (held !== length) {
+      const held = await tab.fillHidden(f.n, password)
+      if (held !== password.length) {
         throw new Error(
-          `${f.line} holds ${held} characters, not ${length}: the site may cap passwords shorter (try length); the generated one is kept as ${name}'s password`,
+          `${f.line} holds ${held} characters, not ${password.length}: the site may cap passwords shorter (try length); the generated one is kept as ${name}'s password`,
         )
       }
     }
     said.push(
-      `generated a ${length}-character password and filled it into ${into.map((f) => f.line).join(" and ")}`,
+      `generated a ${password.length}-character password and filled it into ${into.map((f) => f.line).join(" and ")}`,
     )
-  } else if (passwordFrom === "page") {
-    if (element === null) {
-      throw new Error("Name the field or element that shows the password (element or match)")
-    }
-    secret.password = await revealed(tab, element)
-    said.push(`kept the password the page shows (${secret.password.length} characters)`)
-  } else if (passwordFrom.startsWith("/") || passwordFrom.startsWith("~")) {
-    const file = passwordFrom.startsWith("~")
-      ? `${process.env.HOME}${passwordFrom.slice(1)}`
-      : passwordFrom
-    const read = await Bun.file(file).text()
-    const password = read.replace(/[\r\n]+$/u, "")
-    if (password === "") {
-      throw new Error(`${passwordFrom} is empty`)
-    }
-    secret.password = password
-    said.push(
-      `kept the password in ${passwordFrom} (${password.length} characters; delete that file now that the Keychain has it)`,
-    )
-  } else if (passwordFrom !== "" && passwordFrom !== "keep") {
-    throw new Error("password is generate, page, a file's path on this Mac, keep or none")
   }
-  if (totpFrom === "none") {
-    delete secret.totp
-    said.push("took its authenticator key away")
-  } else if (totpFrom === "page") {
-    const shown = await revealed(tab, element)
-    secret.totp = accounts.parseTotp(shown, element === null)
-    said.push(
-      `kept the authenticator key the page shows (${secret.totp.digits} digits every ${secret.totp.period} s)`,
-    )
-  } else if (totpFrom.startsWith("/") || totpFrom.startsWith("~")) {
-    const file = totpFrom.startsWith("~") ? `${process.env.HOME}${totpFrom.slice(1)}` : totpFrom
-    secret.totp = accounts.parseTotp(await Bun.file(file).text())
-    said.push(
-      `kept the authenticator key in ${totpFrom} (delete that file now that the Keychain has it)`,
-    )
-  } else if (totpFrom !== "" && totpFrom !== "keep") {
-    throw new Error("totp is page, a file's path on this Mac, keep or none")
-  }
-  const saved: Account = {
-    ...a,
-    password: secret.password !== undefined,
-    totp: secret.totp !== undefined,
-    saved: Date.now(),
-  }
-  await accounts.save(name, saved, secret)
-  let text = `Saved ${name}: ${saved.username ?? "no username"}, for ${saved.sites.join(", ")}; it holds ${holds(saved)}.`
+  const username = keeper.plain(saved, "username")
+  let text = `Saved ${saved.name} in the vault: ${username ?? "no username"}, for ${saved.urls.map(accounts.site).join(", ")}; it holds ${holdsWhat(saved)}.`
   if (said.length > 0) {
     text += ` I ${said.join("; ")}.`
   }
-  text += ` sign_in {account: "${name}"} fills it on those sites; nothing secret ever comes back.`
+  text += ` sign_in {account: "${saved.name}"} fills it on those sites; nothing secret ever comes back.`
   return done(url === null ? text : `${text}\n${await nowOn(tab)}`)
 }
 
@@ -514,24 +536,22 @@ const ago = (at: number) => {
     : `${Math.floor(minutes / 1440)} days ago`
 }
 
-/** This Mac's stored accounts, or with forget, one taken away. */
+/** The vault's logins, or with forget, one moved to its trash. */
 export const listAccounts = async (args: Json): Promise<Done> => {
   if (args.forget === true) {
     const name = str(args.account).trim()
-    await accounts.forget(name)
-    return done(`Forgot ${name}: its Keychain item is deleted, and sign_in can't fill it anymore.`)
+    await keeper.remove(name)
+    return done(`Moved ${name} to the vault's trash: sign_in can't fill it anymore.`)
   }
-  const all = Object.entries(accounts.list())
+  const all = await keeper.list({ kind: "login" })
   if (all.length === 0) {
     return done(
-      "This Mac has no stored accounts. save_account keeps one; sign_in without one fills from the browser's saved passwords.",
+      "The vault has no logins. save_account keeps one; sign_in without one fills from the browser's saved passwords.",
     )
   }
   const lines = all.map(
-    ([name, a]) =>
-      `- ${name}: ${a.username ?? "no username"}, for ${a.sites.join(", ")}; ${holds(a)}; saved ${ago(a.saved)}${a.used === undefined ? "" : `, last filled ${ago(a.used)}`}`,
+    (a) =>
+      `- ${a.name}: ${keeper.plain(a, "username") ?? "no username"}, for ${a.urls.map(accounts.site).join(", ")}; ${holdsWhat(a)}; saved ${ago(a.updated)}${a.used === undefined ? "" : `, last filled ${ago(a.used)}`}`,
   )
-  return done(
-    `This Mac's stored accounts (sign_in {account} fills one on its sites):\n${lines.join("\n")}`,
-  )
+  return done(`The vault's logins (sign_in {account} fills one on its sites):\n${lines.join("\n")}`)
 }

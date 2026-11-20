@@ -1,44 +1,7 @@
-// Stored accounts: sign-ins this Mac keeps for sites the browser has no saved password for, so the
-// browser fills them itself (`sign_in`), and an authenticator key, so it makes the code too. An agent
-// names the account; its password and key never come back and never go in a request or result.
-// What's secret (the password, the one before it, the authenticator key) is one login Keychain item
-// per account; what isn't (the username, the sites it may be filled on, what it holds, when it was
-// saved and last used) is in accounts.json beside the extension. Ported from Switchboard's
-// accounts.rs, whose accounts it takes in once.
-import { createHmac, randomInt } from "node:crypto"
-import { existsSync } from "node:fs"
-import { homedir } from "node:os"
-import path from "node:path"
-
-import { Schema } from "effect"
-
-import { HOME } from "./chrome.ts"
-import { keychainDelete, keychainRead, keychainWrite, readJson, writePrivate } from "./vault.ts"
-
-const SERVICE = "Switch account"
-const INDEX = path.join(HOME, "accounts.json")
-
-/** What's known of an account that isn't secret. */
-export interface Account {
-  username?: string
-  /** Sites it may be filled on: a host, or a domain whose subdomains count too. */
-  sites: string[]
-  password: boolean
-  totp: boolean
-  /** When it was last saved and last filled, in ms since 1970. */
-  saved: number
-  used?: number
-}
-
-const accountSchema = Schema.Struct({
-  username: Schema.optionalKey(Schema.String),
-  sites: Schema.Array(Schema.String),
-  password: Schema.Boolean,
-  totp: Schema.Boolean,
-  saved: Schema.Finite,
-  used: Schema.optionalKey(Schema.Finite),
-})
-const index = Schema.Record(Schema.String, accountSchema)
+// Logins' plain parts the browser checks before the vault is asked: what a site is, whether a page
+// is one of a login's sites, and an authenticator key read off a setup page (kept in the vault as
+// its otpauth link). The vault (keeper.ts) keeps every secret. Ported from Switchboard's
+// accounts.rs.
 
 /** An authenticator key (RFC 6238), as an `otpauth://` link carries it. */
 export interface Totp {
@@ -49,17 +12,6 @@ export interface Totp {
   /** SHA1 (nearly every site), SHA256 or SHA512. */
   algorithm: string
 }
-
-/** What's secret, as the Keychain item holds it. */
-export interface Secrets {
-  password?: string
-  /** The password before the last one generated, in case the site never took the new one. */
-  previous?: string
-  totp?: Totp
-}
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v)
 
 /** How long a key shown as text usually is, in base32 letters. */
 const KEY_LENGTHS = new Set([16, 24, 26, 32, 52, 64, 103])
@@ -216,45 +168,9 @@ export const parseTotp = (raw: string, needsDigit = false): Totp => {
   return checked({ secret: best, digits: 6, period: 30, algorithm: "SHA1" })
 }
 
-/** The code for a moment (seconds since 1970). */
-export const totpCode = (t: Totp, unix: number) => {
-  const counter = Buffer.alloc(8)
-  counter.writeBigUInt64BE(BigInt(Math.floor(unix / t.period)))
-  const mac = createHmac(t.algorithm.toLowerCase(), base32(t.secret)).update(counter).digest()
-  const offset = (mac.at(-1) ?? 0) & 0x0f
-  const value = mac.readUInt32BE(offset) & 0x7f_ff_ff_ff
-  return String(value % 10 ** t.digits).padStart(t.digits, "0")
-}
-
-/** The code now, waiting for the next one when this one has under three seconds left. */
-export const currentCode = async (t: Totp) => {
-  const unix = Date.now() / 1000
-  const left = t.period - (unix % t.period)
-  if (left < 3) {
-    await Bun.sleep(left * 1000 + 300)
-  }
-  return totpCode(t, Date.now() / 1000)
-}
-
-const GENERATED = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_.!@"
-
-/** A strong random password (12 to 64 characters), with upper, lower, a digit and a symbol. */
-export const generate = (length: number) => {
-  if (length < 12 || length > 64) {
-    throw new Error(`A generated password is 12 to 64 characters long, not ${length}`)
-  }
-  for (;;) {
-    const password = Array.from({ length }, () => GENERATED[randomInt(GENERATED.length)]).join("")
-    if (
-      /[A-Z]/u.test(password) &&
-      /[a-z]/u.test(password) &&
-      /\d/u.test(password) &&
-      /[^A-Za-z0-9]/u.test(password)
-    ) {
-      return password
-    }
-  }
-}
+/** The key as the vault keeps it: an otpauth link. */
+export const otpauth = (t: Totp) =>
+  `otpauth://totp/?secret=${t.secret}&digits=${t.digits}&period=${t.period}&algorithm=${t.algorithm}`
 
 /** A name an account can have: short, lowercase, no spaces. */
 export const checkName = (name: string) => {
@@ -287,7 +203,7 @@ export const site = (text: string) => {
 }
 
 /** Whether something kept for `sites` may be filled on the page at `url`: one of them, over HTTPS. */
-export const allows = (sites: readonly string[], url: string, what = "a stored account") => {
+export const allows = (sites: readonly string[], url: string, what = "that login") => {
   const host = hostOf(url)
   const local = host === "localhost" || host === "127.0.0.1"
   if (!url.startsWith("https://") && !(local && url.startsWith("http://"))) {
@@ -298,98 +214,4 @@ export const allows = (sites: readonly string[], url: string, what = "a stored a
       `The tab is on ${host}, and ${what} is kept for ${sites.length === 0 ? "no site yet" : sites.join(", ")}: it's never filled anywhere else`,
     )
   }
-}
-
-export const list = (): Record<string, Account> =>
-  Object.fromEntries(
-    Object.entries(readJson(INDEX, index, {})).map(([n, a]) => [n, { ...a, sites: [...a.sites] }]),
-  )
-
-/** One account, or an error that names the ones there are. */
-export const account = (name: string) => {
-  const all = list()
-  const found = all[name]
-  if (found) {
-    return found
-  }
-  const names = Object.keys(all)
-  throw new Error(
-    `This Mac has no stored account ${JSON.stringify(name)}${names.length === 0 ? "" : `; it has ${names.join(", ")}`}`,
-  )
-}
-
-const toSecrets = (v: unknown): Secrets => {
-  if (!isRecord(v)) {
-    return {}
-  }
-  const out: Secrets = {}
-  if (typeof v.password === "string") {
-    out.password = v.password
-  }
-  if (typeof v.previous === "string") {
-    out.previous = v.previous
-  }
-  const t = v.totp
-  if (isRecord(t) && typeof t.secret === "string") {
-    out.totp = {
-      secret: t.secret,
-      digits: typeof t.digits === "number" ? t.digits : 6,
-      period: typeof t.period === "number" ? t.period : 30,
-      algorithm: typeof t.algorithm === "string" ? t.algorithm : "SHA1",
-    }
-  }
-  return out
-}
-
-export const secrets = async (name: string) => toSecrets(await keychainRead(SERVICE, name))
-
-/** Saves an account: its secrets first (checked as they read back), then the index. */
-export const save = async (name: string, a: Account, s: Secrets) => {
-  checkName(name)
-  await keychainWrite(SERVICE, name, s)
-  writePrivate(INDEX, JSON.stringify({ ...list(), [name]: a }, null, 2))
-}
-
-/** Notes when an account was last filled. */
-export const touch = (name: string) => {
-  const all = list()
-  const a = all[name]
-  if (a) {
-    a.used = Date.now()
-    writePrivate(INDEX, JSON.stringify(all, null, 2))
-  }
-}
-
-export const forget = async (name: string) => {
-  account(name)
-  await keychainDelete(SERVICE, name)
-  const { [name]: _, ...rest } = list()
-  writePrivate(INDEX, JSON.stringify(rest, null, 2))
-}
-
-/** Switchboard's macOS appendage, which this replaces: where it kept its accounts' index, and its service. */
-const LEGACY = path.join(homedir(), "Library/Application Support/Switchboard/macos/accounts.json")
-const LEGACY_SERVICE = "Switchboard account"
-
-/** Takes in the accounts the appendage this replaces kept, once each; says how many. */
-export const importLegacy = async () => {
-  if (!existsSync(LEGACY)) {
-    return 0
-  }
-  const theirs = readJson(LEGACY, index, {})
-  const ours = list()
-  let taken = 0
-  for (const [name, a] of Object.entries(theirs)) {
-    if (ours[name]) {
-      continue
-    }
-    try {
-      const s = a.password || a.totp ? toSecrets(await keychainRead(LEGACY_SERVICE, name)) : {}
-      await save(name, { ...a, sites: [...a.sites] }, s)
-      taken += 1
-    } catch {
-      // Its item can't be read here (a locked Keychain): tried again at the next start.
-    }
-  }
-  return taken
 }

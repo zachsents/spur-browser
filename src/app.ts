@@ -1,7 +1,7 @@
 // The browser spur: this Mac's own browser (Chrome, or another Chromium browser), signed in as the
 // user is there, driven through the spur's extension and the browser's debugger in background tabs,
 // grouped and collapsed out of the way. `run` hands a routine goal to the user's decision model;
-// `act` is exact control; `secret` keeps what fill_secret puts in fields; the tab widget shows the
+// `act` is exact control; `secret` lists and keeps the vault's secrets fill_secret puts in fields; the tab widget shows the
 // tab held for the user, which they drive from it; `browser.page` says what's in front. Ported from
 // Switchboard's browser appendage.
 import { hostname } from "node:os"
@@ -124,7 +124,7 @@ const actTool = tool(
   "act",
   {
     description: marked(
-      `Exact control of a tab in the user's own browser on this Mac, signed in as they are there, in the background (a collapsed tab group; their own tabs and focus are left alone). Each session is one tab that lasts between calls. Ops: look (the page as an outline with numbered elements; view: screenshot for an annotated screenshot), find {text} (elements by words, else by meaning), click {element | match | x, y; button, count, modifiers}, type {text, element?, submit?, append?} (replaces a field's text and checks it), set {element, value} (a dropdown option, a checkbox, a date), sign_in {account?, otp?, submit?} (fills a sign-in page after page, pressing Next or Enter after each, and nothing secret passes through you: account names one of this Mac's stored accounts (accounts lists them), whose username, password and authenticator code it fills, on its own sites only; else the browser fills it from its saved passwords, account then being words from the saved sign-in, like its username; a page asking for a one-time code it can't make puts an action item in the user's queue and holds the tab, and otp then fills the code; a page asking again is reported, never retried), save_account {account, username?, sites?, password?: generate | page | a file's path, totp?: page | a file's path, element | match, length?} (keeps an account in this Mac's Keychain: generate makes a strong password and fills the page's new-password fields; page reads a password or two-factor key an element shows, never into your context), accounts {account?, forget?} (the stored accounts: usernames and sites, never secrets), fill_secret {secret; element | match; format?, slice?} (one of this Mac's kept secrets, like a card's number, into the field straight from the Keychain: the secret tool lists them; format shapes it, each # its next letter or digit, like ##/##; slice [start, end] is the part one box of a split field takes), autofill {element | match | x, y; pick?} (the browser fills the field from what it has saved, a card's number, expiry and code at once: without pick it lists what it offers; pick is words from one, like a card's last four digits), key {keys: "Escape", "cmd+a", "Tab Tab Enter"}, hover, scroll {direction?, amount?, element | x, y}, drag {element | x, y, to}, screenshot {element? region? marks?}, text (the page's words), value {element, save_to?}, wait {text | gone | seconds}, navigate {url}, back, forward, reload, js {code} (JavaScript in the page; the last expression's value comes back), upload {element, paths}, dialog {accept, text?}, console, network {match? body?}, tabs, attach {tab: an id from tabs, or "front"}, show (brings the tab to the front of the screen), hold {hours?} (keeps it open for an approval), release {keep?}. steps: a list of ops run in order, stopping at the first that fails. Numbers stay with their element. match is text (or /regex/) in an element's line, like button "Send". Every op says where the tab is after it. sign_in and autofill bring the tab to the front for a few seconds, so they wait until nobody's using this Mac. Never type passwords, payment or identity numbers (refused). A committal click (send, submit, buy, post, delete) is the user's unless they asked for exactly that: hold the tab and ask for approval first.`,
+      `Exact control of a tab in the user's own browser on this Mac, signed in as they are there, in the background (a collapsed tab group; their own tabs and focus are left alone). Each session is one tab that lasts between calls. Ops: look (the page as an outline with numbered elements; view: screenshot for an annotated screenshot), find {text} (elements by words, else by meaning), click {element | match | x, y; button, count, modifiers}, type {text, element?, submit?, append?} (replaces a field's text and checks it), set {element, value} (a dropdown option, a checkbox, a date), sign_in {account?, otp?, submit?} (fills a sign-in page after page, pressing Next or Enter after each, and nothing secret passes through you: account names a login in the user's vault (accounts lists them), whose username, password and authenticator code it fills, on its own sites only; without account, the vault's one login for the site if it has one; else the browser fills it from its saved passwords, account then being words from the saved sign-in, like its username; a page asking for a one-time code it can't make puts an action item in the user's queue and holds the tab, and otp then fills the code; a page asking again is reported, never retried), save_account {account, username?, sites?, password?: generate | page | a file's path, totp?: page | a file's path, element | match, length?} (keeps a login in the user's vault: generate has the vault make a strong password and fills the page's new-password fields, the old one staying in its history; page reads a password or two-factor key an element shows, never into your context), accounts {account?, forget?} (the vault's logins: usernames and sites, never secrets; forget moves one to its trash), fill_secret {secret; element | match; format?, slice?} (one of the vault's secrets by reference, like card/main.number, into the field straight from the vault: the secret tool lists them; format shapes it, each # its next letter or digit, like ##/##; slice [start, end] is the part one box of a split field takes), autofill {element | match | x, y; pick?} (the browser fills the field from what it has saved, a card's number, expiry and code at once: without pick it lists what it offers; pick is words from one, like a card's last four digits), key {keys: "Escape", "cmd+a", "Tab Tab Enter"}, hover, scroll {direction?, amount?, element | x, y}, drag {element | x, y, to}, screenshot {element? region? marks?}, text (the page's words), value {element, save_to?}, wait {text | gone | seconds}, navigate {url}, back, forward, reload, js {code} (JavaScript in the page; the last expression's value comes back), upload {element, paths}, dialog {accept, text?}, console, network {match? body?}, tabs, attach {tab: an id from tabs, or "front"}, show (brings the tab to the front of the screen), hold {hours?} (keeps it open for an approval), release {keep?}. steps: a list of ops run in order, stopping at the first that fails. Numbers stay with their element. match is text (or /regex/) in an element's line, like button "Send". Every op says where the tab is after it. sign_in and autofill bring the tab to the front for a few seconds, so they wait until nobody's using this Mac. Never type passwords, payment or identity numbers (refused). A committal click (send, submit, buy, post, delete) is the user's unless they asked for exactly that: hold the tab and ask for approval first.`,
     ),
     input: Schema.Struct({
       op: Schema.optionalKey(Schema.Literals(OPS)),
@@ -194,7 +194,7 @@ const secretTool = tool(
   "secret",
   {
     description:
-      "The user's secrets this Mac keeps for forms (card numbers and codes, identity and bank numbers), which act's fill_secret puts straight into a field: list (names and what they are, never a secret), import {card, name, label?} (keeps a card the browser has saved, its words like its last four digits, as name.number, .cvc, .month, .year, .expiry and .name; it brings a tab to the front for a few seconds, so it waits until nobody's using this Mac), forget {name} (one, or a group like card/main).",
+      "The user's secrets for forms in their vault (card numbers and codes, identity and bank numbers), which act's fill_secret puts straight into a field: list (names and what they hold, never a secret), import {card, name, label?} (keeps a card the browser has saved, its words like its last four digits, in the vault as name.number, .cvc, .month, .year, .expiry and .holder; it brings a tab to the front for a few seconds, so it waits until nobody's using this Mac), forget {name} (moves it to the vault's trash).",
     input: Schema.Struct({
       op: Schema.Literals(["list", "import", "forget"]),
       card: optionalString,
@@ -218,13 +218,16 @@ const secretTool = tool(
         const gone = await secrets.forget(input.name ?? "")
         return `Forgot ${gone.join(", ")}.`
       }
-      const all = Object.entries(secrets.list())
+      const all = await secrets.list()
       return all.length === 0
-        ? "This Mac keeps no secrets. import keeps a card the browser has saved."
+        ? "The vault keeps no secrets for forms. import keeps a card the browser has saved."
         : all
             .map(
-              ([n, it]) =>
-                `- ${n}: ${it.label} (${it.chars} characters, from ${it.from})${it.sites ? `, only on ${it.sites.join(", ")}` : ""}`,
+              (o) =>
+                `- ${o.name}: ${o.title} (${o.kind}; ${o.fields
+                  .filter((f) => f.set === true)
+                  .map((f) => `${o.name}.${f.id}`)
+                  .join(", ")})${o.urls.length > 0 ? `, only on ${o.urls.join(", ")}` : ""}`,
             )
             .join("\n")
     }),
@@ -332,7 +335,7 @@ export const browserApp = defineApp({
   name: APP,
   version: "3",
   instructions:
-    "The user's own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a stored account or the browser's saved passwords, and fill_secret puts a kept secret in a field. A tab held for the user (an approval, a code, a human check) shows in the tab widget, which they drive from wherever they are. Release sessions when done.",
+    "The user's own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a login in the user's vault or the browser's saved passwords, and fill_secret puts a vault secret in a field. A tab held for the user (an approval, a code, a human check) shows in the tab widget, which they drive from wherever they are. Release sessions when done.",
   tools: [runTool, actTool, secretTool, viewTool, inputTool],
   events: [PageEvent],
   widgets: [tabWidget],
