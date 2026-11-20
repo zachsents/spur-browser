@@ -18,6 +18,7 @@ import { newestHeld } from "./session.ts"
 import { parseKey, withTab } from "./tab.ts"
 import { tabHtml } from "./view/build.ts"
 import { act, OPS } from "./ops.ts"
+import { askedField, guard, marked } from "./personal.ts"
 import type { Decide, Done } from "./common.ts"
 import { run } from "./run.ts"
 import type { Tab } from "./tab.ts"
@@ -72,6 +73,7 @@ const output = (d: Done) =>
 /** Runs `work` on the named session's tab, once the extension is there. */
 const onTab = (args: Json, work: (tab: Tab) => Promise<Done>) =>
   task(async () => {
+    guard(args)
     await chrome.reach()
     const name =
       typeof args.session === "string" && args.session !== "" ? args.session : DEFAULT_SESSION
@@ -95,8 +97,9 @@ const strings = Schema.optionalKey(Schema.Record(Schema.String, Schema.String))
 const runTool = tool(
   "run",
   {
-    description:
+    description: marked(
       "Do a routine web task in the user's own browser on this Mac, signed in as they are there, with a fast decision model (about half a second a step): navigating, searching, following links, filling forms, multi-step clicking. Give one objective on one site with explicit steps (name exact link and button text when you know it), every string to type in facts, and files to upload in files. It works in a background tab (the session's, shared with act, so check and finish with act). It returns where the tab ended up and the steps it took, not an answer: status done (the model's belief, so check), blocked with why, max_steps, or needs_approval when the next step would commit something (send, submit, buy, post, delete): it stops there and gives the act call that does just that step, unless approved says the user asked for exactly this. Use act for fiddly widgets, judgment calls, reading, and anything visual. Never give it passwords, payment or identity numbers: it refuses them (act's sign_in signs in from the browser's saved passwords).",
+    ),
     input: Schema.Struct({
       goal: Schema.String,
       url: optionalString,
@@ -107,6 +110,7 @@ const runTool = tool(
       keystrokes: optionalBoolean,
       session: optionalString,
       group: optionalString,
+      ...askedField,
     }),
   },
   (input) =>
@@ -119,7 +123,9 @@ const runTool = tool(
 const actTool = tool(
   "act",
   {
-    description: `Exact control of a tab in the user's own browser on this Mac, signed in as they are there, in the background (a collapsed tab group; their own tabs and focus are left alone). Each session is one tab that lasts between calls. Ops: look (the page as an outline with numbered elements; view: screenshot for an annotated screenshot), find {text} (elements by words, else by meaning), click {element | match | x, y; button, count, modifiers}, type {text, element?, submit?, append?} (replaces a field's text and checks it), set {element, value} (a dropdown option, a checkbox, a date), sign_in {account?, otp?, submit?} (fills a sign-in page after page, pressing Next or Enter after each, and nothing secret passes through you: account names one of this Mac's stored accounts (accounts lists them), whose username, password and authenticator code it fills, on its own sites only; else the browser fills it from its saved passwords, account then being words from the saved sign-in, like its username; a page asking for a one-time code it can't make puts an action item in the user's queue and holds the tab, and otp then fills the code; a page asking again is reported, never retried), save_account {account, username?, sites?, password?: generate | page | a file's path, totp?: page | a file's path, element | match, length?} (keeps an account in this Mac's Keychain: generate makes a strong password and fills the page's new-password fields; page reads a password or two-factor key an element shows, never into your context), accounts {account?, forget?} (the stored accounts: usernames and sites, never secrets), fill_secret {secret; element | match; format?, slice?} (one of this Mac's kept secrets, like a card's number, into the field straight from the Keychain: the secret tool lists them; format shapes it, each # its next letter or digit, like ##/##; slice [start, end] is the part one box of a split field takes), autofill {element | match | x, y; pick?} (the browser fills the field from what it has saved, a card's number, expiry and code at once: without pick it lists what it offers; pick is words from one, like a card's last four digits), key {keys: "Escape", "cmd+a", "Tab Tab Enter"}, hover, scroll {direction?, amount?, element | x, y}, drag {element | x, y, to}, screenshot {element? region? marks?}, text (the page's words), value {element, save_to?}, wait {text | gone | seconds}, navigate {url}, back, forward, reload, js {code} (JavaScript in the page; the last expression's value comes back), upload {element, paths}, dialog {accept, text?}, console, network {match? body?}, tabs, attach {tab: an id from tabs, or "front"}, show (brings the tab to the front of the screen), hold {hours?} (keeps it open for an approval), release {keep?}. steps: a list of ops run in order, stopping at the first that fails. Numbers stay with their element. match is text (or /regex/) in an element's line, like button "Send". Every op says where the tab is after it. sign_in and autofill bring the tab to the front for a few seconds, so they wait until nobody's using this Mac. Never type passwords, payment or identity numbers (refused). A committal click (send, submit, buy, post, delete) is the user's unless they asked for exactly that: hold the tab and ask for approval first.`,
+    description: marked(
+      `Exact control of a tab in the user's own browser on this Mac, signed in as they are there, in the background (a collapsed tab group; their own tabs and focus are left alone). Each session is one tab that lasts between calls. Ops: look (the page as an outline with numbered elements; view: screenshot for an annotated screenshot), find {text} (elements by words, else by meaning), click {element | match | x, y; button, count, modifiers}, type {text, element?, submit?, append?} (replaces a field's text and checks it), set {element, value} (a dropdown option, a checkbox, a date), sign_in {account?, otp?, submit?} (fills a sign-in page after page, pressing Next or Enter after each, and nothing secret passes through you: account names one of this Mac's stored accounts (accounts lists them), whose username, password and authenticator code it fills, on its own sites only; else the browser fills it from its saved passwords, account then being words from the saved sign-in, like its username; a page asking for a one-time code it can't make puts an action item in the user's queue and holds the tab, and otp then fills the code; a page asking again is reported, never retried), save_account {account, username?, sites?, password?: generate | page | a file's path, totp?: page | a file's path, element | match, length?} (keeps an account in this Mac's Keychain: generate makes a strong password and fills the page's new-password fields; page reads a password or two-factor key an element shows, never into your context), accounts {account?, forget?} (the stored accounts: usernames and sites, never secrets), fill_secret {secret; element | match; format?, slice?} (one of this Mac's kept secrets, like a card's number, into the field straight from the Keychain: the secret tool lists them; format shapes it, each # its next letter or digit, like ##/##; slice [start, end] is the part one box of a split field takes), autofill {element | match | x, y; pick?} (the browser fills the field from what it has saved, a card's number, expiry and code at once: without pick it lists what it offers; pick is words from one, like a card's last four digits), key {keys: "Escape", "cmd+a", "Tab Tab Enter"}, hover, scroll {direction?, amount?, element | x, y}, drag {element | x, y, to}, screenshot {element? region? marks?}, text (the page's words), value {element, save_to?}, wait {text | gone | seconds}, navigate {url}, back, forward, reload, js {code} (JavaScript in the page; the last expression's value comes back), upload {element, paths}, dialog {accept, text?}, console, network {match? body?}, tabs, attach {tab: an id from tabs, or "front"}, show (brings the tab to the front of the screen), hold {hours?} (keeps it open for an approval), release {keep?}. steps: a list of ops run in order, stopping at the first that fails. Numbers stay with their element. match is text (or /regex/) in an element's line, like button "Send". Every op says where the tab is after it. sign_in and autofill bring the tab to the front for a few seconds, so they wait until nobody's using this Mac. Never type passwords, payment or identity numbers (refused). A committal click (send, submit, buy, post, delete) is the user's unless they asked for exactly that: hold the tab and ask for approval first.`,
+    ),
     input: Schema.Struct({
       op: Schema.optionalKey(Schema.Literals(OPS)),
       steps: Schema.optionalKey(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))),
@@ -174,6 +180,7 @@ const actTool = tool(
       totp: optionalString,
       length: optionalNumber,
       forget: optionalBoolean,
+      ...askedField,
     }),
   },
   (input) =>
@@ -193,11 +200,13 @@ const secretTool = tool(
       card: optionalString,
       name: optionalString,
       label: optionalString,
+      ...askedField,
     }),
   },
   (input) =>
     task(async () => {
       if (input.op === "import") {
+        guard(input)
         if (input.card === undefined || input.name === undefined) {
           throw new Error(
             "import needs card (words from the card's line in the browser's suggestions) and name (like card/main)",
