@@ -813,9 +813,14 @@ const one = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
 export const act = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
   const { steps } = args
   if (!Array.isArray(steps)) {
+    if (args.op === "steps") {
+      throw new Error("op steps needs steps: a list of ops")
+    }
     return await one(tab, args, decide)
   }
-  const { steps: _, ...base } = args
+  // `op: "steps"` with the list, as Switchboard's browser action took it, is the list alone.
+  const { steps: _, op: given, ...rest } = args
+  const base: Json = given === undefined || given === "steps" ? rest : { ...rest, op: given }
   const out: Done = { text: "", images: [] }
   for (const [i, step] of steps.entries()) {
     const merged: Json = { ...base, ...(isJson(step) ? step : {}) }
