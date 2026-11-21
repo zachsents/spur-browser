@@ -162,8 +162,26 @@ const size = () => {
 
 window.addEventListener(
   "message",
-  (e: MessageEvent<{ id?: unknown; result?: unknown; error?: unknown }>) => {
-    if (e.source !== window.parent || typeof e.data.id !== "number") {
+  (
+    e: MessageEvent<{
+      id?: unknown
+      result?: unknown
+      error?: unknown
+      method?: unknown
+      params?: unknown
+    }>,
+  ) => {
+    if (e.source !== window.parent) {
+      return
+    }
+    if (e.data.method === "ui/notifications/tool-input" && isRecord(e.data.params)) {
+      const { arguments: args } = e.data.params
+      if (isRecord(args) && typeof args.session === "string") {
+        ;({ session } = args)
+      }
+      return
+    }
+    if (typeof e.data.id !== "number") {
       return
     }
     if (e.data.id === 1 && e.data.result !== undefined) {
