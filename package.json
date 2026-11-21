@@ -19,7 +19,6 @@
     "check": "bun run typecheck && bun run fix"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/server": "^2.4.0",
     "effect": "^4.1.5",
     "spur-kit": "github:zachsents/spur-kit#399e797"
