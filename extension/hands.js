@@ -1,4 +1,4 @@
-// The spur's hands in Chrome. It drives tabs here through Chrome's debugger,
+// The browser extension's hands in Chrome. It drives tabs here through Chrome's debugger,
 // over the native messaging port (background.js). Each session is one tab: one
 // an agent opened, in the background and in a collapsed group so the person's own tabs
 // and focus are left alone, or one of theirs it took over. Sessions are kept in

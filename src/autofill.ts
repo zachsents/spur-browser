@@ -1,5 +1,5 @@
 // The autofill helper (autofill-source.ts), built once per source on the Mac that runs it, into
-// ~/.switch/bin. It runs as this spur's child, so Accessibility is the host app's.
+// ~/.switch/bin. It runs as this extension's child, so Accessibility is the host app's.
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"

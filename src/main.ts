@@ -1,9 +1,9 @@
-// The browser spur as a stdio MCP server: what a host runs. It writes the extension and its relay
-// where the browser loads them, says it's here to the vault, then takes the relay's
+// The browser extension as a stdio MCP server: what a host runs. It writes the Chrome extension and
+// its relay where the browser loads them, says it's here to the vault, then takes the relay's
 // connection and says what's in front.
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 import { Effect, Layer } from "effect"
-import { AppEvents, Models, serve } from "spur-kit"
+import { AppEvents, Models, serve } from "switch-ext-kit"
 
 import { browserApp, watch } from "./app.ts"
 import { install, serve as listen } from "./chrome.ts"

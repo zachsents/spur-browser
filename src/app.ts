@@ -1,5 +1,5 @@
-// The browser spur: this Mac's own browser (Chrome, or another Chromium browser), signed in as the
-// user is there, driven through the spur's extension and the browser's debugger in background tabs,
+// The browser extension: this Mac's own browser (Chrome, or another Chromium browser), signed in as the
+// user is there, driven through its Chrome extension and the browser's debugger in background tabs,
 // grouped and collapsed out of the way. `run` hands a routine goal to the user's decision model;
 // `act` is exact control; `secret` lists and keeps the vault's secrets fill_secret puts in fields; the tab widget shows the
 // tab held for the user, which they drive from it; `browser.page` says what's in front. Ported from
@@ -7,8 +7,8 @@
 import { hostname } from "node:os"
 
 import { Effect, Queue, Schema } from "effect"
-import { AppEvents, answer, defineApp, defineEvent, mcpApp, Models, tool } from "spur-kit"
-import type { WidgetDef } from "spur-kit"
+import { AppEvents, answer, defineApp, defineEvent, mcpApp, Models, tool } from "switch-ext-kit"
+import type { WidgetDef } from "switch-ext-kit"
 
 import * as chrome from "./chrome.ts"
 import type { Json } from "./chrome.ts"
@@ -312,7 +312,7 @@ const inputTool = tool(
     }),
 )
 
-// Built when the spur starts: Bun runs no macros from an installed package.
+// Built when the extension starts: Bun runs no macros from an installed package.
 const html = tabHtml(APP)
 
 const tabWidget: WidgetDef = {

@@ -1,6 +1,6 @@
-// The extension's native messaging host, started by the browser: says which browser it is (and
-// which process of it), then relays between the browser's stdio (a 4-byte native-endian length,
-// then JSON) and the spur's socket, a JSON message a line.
+// The Chrome extension's native messaging host, started by the browser: says which browser it is
+// (and which process of it), then relays between the browser's stdio (a 4-byte native-endian
+// length, then JSON) and the browser extension's socket, a JSON message a line.
 import { connect } from "node:net"
 
 import { CHROMIUM, SOCKET } from "./chrome.ts"

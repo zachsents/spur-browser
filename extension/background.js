@@ -1,6 +1,7 @@
-// Switch's browser spur in Chrome (or another Chromium browser), over native messaging to the spur
-// on this Mac. Eyes: it reports the page in front, and whether an agent is driving it. Hands
-// (hands.js): agents drive tabs here through the debugger. Ported from Switchboard's extension.
+// The browser extension's half in Chrome (or another Chromium browser), over native messaging to
+// its half on this Mac. Eyes: it reports the page in front, and whether an agent is driving it.
+// Hands (hands.js): agents drive tabs here through the debugger. Ported from Switchboard's
+// extension.
 
 importScripts("hands.js")
 
@@ -20,7 +21,7 @@ function connect() {
     port = null
     setTimeout(connect, 10000)
   })
-  // The spur asks for a reload when it has written newer files than these (it stamps their hash as version_name).
+  // The Mac half asks for a reload when it has written newer files than these (it stamps their hash as version_name).
   const manifest = chrome.runtime.getManifest()
   port.postMessage({
     type: "hello",
@@ -37,7 +38,7 @@ chrome.alarms
   .get("reconnect")
   .then((alarm) => alarm || chrome.alarms.create("reconnect", { periodInMinutes: 1 }))
 
-/** Sends to the spur, if it's there. */
+/** Sends to the Mac half, if it's there. */
 function emit(message) {
   port?.postMessage(message)
 }

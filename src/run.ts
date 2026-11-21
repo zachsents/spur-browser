@@ -6,7 +6,7 @@
 // asked for exactly that, the run stops before it, holds the tab, and hands back the one call that
 // does that step, for an approval. Secret fields are never typed into. Ported from Switchboard's
 // run.rs, itself grown from Agent Quick Browse.
-import type { ModelAnswer } from "spur-kit"
+import type { ModelAnswer } from "switch-ext-kit"
 
 import type { Json } from "./chrome.ts"
 import { isJson } from "./chrome.ts"

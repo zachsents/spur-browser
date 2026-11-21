@@ -1,9 +1,9 @@
-// The user's vault (the secrets spur), which keeps every password, key and card the browser fills.
-// The browser keeps none: it has one key pair (its secret half in this Mac's Keychain), allowed once
-// by the user, and the vault seals each secret to it for one fill (`release`); what the browser
-// learns from a page it seals to the vault's key (`deposit`). Calls go through the core, as the
-// user's clients make them.
-import { seal, sealedKey, openSealed } from "spur-kit"
+// The user's vault (the secrets extension), which keeps every password, key and card the browser
+// fills. The browser keeps none: it has one key pair (its secret half in this Mac's Keychain),
+// allowed once by the user, and the vault seals each secret to it for one fill (`release`); what
+// the browser learns from a page it seals to the vault's key (`deposit`). Calls go through the
+// core, as the user's clients make them.
+import { seal, sealedKey, openSealed } from "switch-ext-kit"
 
 import { isJson } from "./chrome.ts"
 import type { Json } from "./chrome.ts"
@@ -24,7 +24,7 @@ const call = async (tool: string, args: Json): Promise<Json> => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        // The spur's own credential, when its host gives it one.
+        // The extension's own credential, when its host gives it one.
         ...(process.env.SWITCH_TOKEN !== undefined && {
           authorization: `Bearer ${process.env.SWITCH_TOKEN}`,
         }),
@@ -42,7 +42,7 @@ const call = async (tool: string, args: Json): Promise<Json> => {
   const text = isJson(first) && typeof first.text === "string" ? first.text : ""
   if (result.isError === true) {
     if (text.startsWith("No app")) {
-      throw new VaultMissingError("The vault (the secrets spur) isn't running")
+      throw new VaultMissingError("The vault (the secrets extension) isn't running")
     }
     throw new Error(text === "" ? `The vault's ${tool} failed` : text)
   }
@@ -74,7 +74,7 @@ const allowed = async () => {
     mine = null
     throw error
   })
-  const r = await call("spur_register", { spur: "browser", key: own.key })
+  const r = await call("extension_register", { extension: "browser", key: own.key })
   if (r.status !== "active") {
     throw new Error(
       `The vault hasn't allowed the browser yet: the user approves it (code ${String(r.code)}) in the Secrets app or the queue`,
@@ -180,7 +180,7 @@ export const release = async (
 }> => {
   const { own } = await allowed()
   const r = await call("release", {
-    spur: "browser",
+    extension: "browser",
     ...which,
     url,
     use: "fill",
@@ -225,6 +225,6 @@ export const deposit = async (draft: {
   const { vault } = await allowed()
   const id = crypto.randomUUID()
   const sealed = await seal(vault, `deposit:${id}`, "browser", JSON.stringify(draft))
-  const r = await call("deposit", { spur: "browser", id, ...sealed })
+  const r = await call("deposit", { extension: "browser", id, ...sealed })
   return outlineOf(r.saved)
 }

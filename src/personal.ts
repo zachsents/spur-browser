@@ -3,7 +3,7 @@
 // letting tabs go and listing them stay open, so a turn can tidy up. Ported from Switchboard's
 // macOS appendage (personal.rs).
 import { Schema } from "effect"
-import { asked, PERSON_ASKED, personal, refusal } from "spur-kit"
+import { asked, PERSON_ASKED, personal, refusal } from "switch-ext-kit"
 
 const here = personal()
 

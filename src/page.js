@@ -1,4 +1,4 @@
-// The browser spur's eyes and fingertips inside a page an agent drives.
+// The browser extension's eyes and fingertips inside a page an agent drives.
 // src/tab.ts injects this into an isolated world of the tab
 // through the extension's debugger, so the page can't see or change it. It
 // numbers what can be acted on, renders the page as an outline, finds the point

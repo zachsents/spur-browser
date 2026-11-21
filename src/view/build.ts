@@ -1,6 +1,6 @@
 // The tab view as one HTML document, its script bundled in: an MCP App view loads nothing from outside.
 import path from "node:path"
-import { view } from "spur-kit"
+import { view } from "switch-ext-kit"
 
 const STYLE = [
   "html,body{margin:0;height:100%;background:#000;overflow:hidden;font:13px -apple-system,system-ui,sans-serif;color:#fff}",

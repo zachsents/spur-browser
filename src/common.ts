@@ -1,6 +1,6 @@
 // What the tools share: an op's result, where the tab is now, what's at a point, and the browser
 // filling a field from what it has saved.
-import type { Decision, Input, Question } from "spur-kit"
+import type { Decision, Input, Question } from "switch-ext-kit"
 
 import * as autofill from "./autofill.ts"
 import * as chrome from "./chrome.ts"

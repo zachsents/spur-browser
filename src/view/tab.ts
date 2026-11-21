@@ -1,9 +1,9 @@
 /// <reference lib="dom" />
 
-// The tab held for the user, live: its own rendering, and their taps, scrolls and typing applied to it
-// as the browser's trusted input. Runs as an MCP App view and speaks the MCP Apps messages itself,
-// asking the spur's tools for frames (view) and applying input (input). What's typed is sent and
-// kept nowhere.
+// The tab held for the user, live: its own rendering, and their taps, scrolls and typing applied to
+// it as the browser's trusted input. Runs as an MCP App view and speaks the MCP Apps messages
+// itself, asking the extension's tools for frames (view) and applying input (input). What's typed
+// is sent and kept nowhere.
 const PROTOCOL = "2026-01-26"
 /** A frame this often while something's happening, and every IDLE_MS when nothing is. */
 const FRAME_MS = 500

@@ -1,8 +1,8 @@
-// The extension, as the spur reaches it. Chrome (or another Chromium browser) starts the relay
-// (relay.ts) as the extension's native messaging host; the relay says which browser started it and
-// passes the browser's messages to this process over a local socket. The extension answers the
-// hands' calls (`call`) and sends what its tabs' debugger sessions report (`events`). Ported from
-// Switchboard's chrome.rs.
+// The Chrome extension, as this process reaches it. Chrome (or another Chromium browser) starts the
+// relay (relay.ts) as the Chrome extension's native messaging host; the relay says which browser
+// started it and passes the browser's messages to this process over a local socket. The extension
+// answers the hands' calls (`call`) and sends what its tabs' debugger sessions report (`events`).
+// Ported from Switchboard's chrome.rs.
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -10,7 +10,7 @@ import path from "node:path"
 import { createServer } from "node:net"
 import type { Socket } from "node:net"
 
-/** Where the spur keeps what Chrome loads: the extension, the relay and the socket. */
+/** Where this keeps what Chrome loads: the Chrome extension, the relay and the socket. */
 export const HOME = process.env.SWITCH_BROWSER_HOME ?? path.join(homedir(), ".switch", "browser")
 export const SOCKET = path.join(HOME, "chrome.sock")
 export const EXTENSION = path.join(HOME, "extension")
@@ -87,7 +87,7 @@ export const install = () => {
   }
   const host = {
     name: HOST,
-    description: "Switch's browser spur",
+    description: "Switch's browser extension",
     path: relay,
     type: "stdio",
     allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
@@ -199,7 +199,7 @@ const heard = (link: Link, message: Json) => {
   }
 }
 
-/** Takes relays' connections for as long as the spur runs. */
+/** Takes relays' connections for as long as the extension runs. */
 export const serve = () => {
   mkdirSync(HOME, { recursive: true })
   rmSync(SOCKET, { force: true })

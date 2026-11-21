@@ -1,7 +1,7 @@
 // The autofill helper's Swift source (autofill.ts builds it): Chrome's own suggestions (saved
-// passwords, cards, addresses) for the field in focus, opened and picked through Accessibility in the
-// browser's own process, so the browser fills the field and nothing secret passes through the spur.
-// Ported from Switchboard's autofill.rs.
+// passwords, cards, addresses) for the field in focus, opened and picked through Accessibility in
+// the browser's own process, so the browser fills the field and nothing secret passes through the
+// extension. Ported from Switchboard's autofill.rs.
 //   autofill idle              {idle: seconds since the last input, locked}
 //   autofill fill <json>       {pid, pick?}: {labels, chose?}
 // Labels are what the suggestions say (a username, a card's last digits), never a password.

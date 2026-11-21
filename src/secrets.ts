@@ -1,7 +1,7 @@
 // The user's secrets for forms (card numbers and codes, identity and bank numbers), kept in the
 // vault. `fill_secret` puts one straight into a field, released by the vault for that one use; the
 // `secret` tool lists them, keeps a card the browser has saved (it fills it into a form of the
-// spur's own, then seals it to the vault), and forgets them. Nothing says what a secret is: a fill is
+// browser extension's own, then seals it to the vault), and forgets them. Nothing says what a secret is: a fill is
 // reported by how many characters the field then holds, and the field is sealed after it, so
 // nothing reads it back and screenshots show dots. Ported from Switchboard's secrets.rs and
 // secret.rs.
@@ -120,7 +120,7 @@ const BLANK = "https://example.com/"
 /** How long the browser may take to fill a saved card (ms). */
 const FILLING = 15_000
 
-/** The browser fills a card it has saved into the spur's own form; what it filled, never returned. */
+/** The browser fills a card it has saved into the extension's own form; what it filled, never returned. */
 const filledCard = async (tab: Tab, pick: string) => {
   await tab.navigate(BLANK)
   await tab.page("cardForm()")
