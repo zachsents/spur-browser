@@ -2,7 +2,7 @@
 // password), and sends each on: from a login in the user's vault when `account` names one, or when
 // the vault has just one for the site (keeper.ts), else the browser fills them itself from its saved passwords (its own suggestions,
 // picked through Accessibility). A page asking for a one-time code is filled from `otp`, or the
-// login's authenticator code; without either, the agent is told the page asks for a code. A field still there after it was sent is reported, never retried. Nothing
+// login's authenticator code. A field still there after it was sent is reported, never retried. Nothing
 // secret ever passes through here: what was filled is said by how many characters it holds.
 // `save_account` keeps a login in the vault; `accounts` lists them. Ported from Switchboard's signin.rs.
 import * as accounts from "./accounts.ts"
@@ -277,9 +277,6 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       )
       if (refused.length > 0) {
         ending = `The page still shows the ${refused.join(" and ")} field after it was sent, so it was likely refused or didn't go; I didn't fill it again (that can lock an account). Read the page for why.`
-      } else if (found.some((f) => f.kind === "code")) {
-        ending =
-          "The page asks for a one-time code: find it in the user's email or texts, then sign_in with otp."
       } else if (found.some((f) => f.kind === "new password")) {
         ending =
           "The page wants a new password: save_account with password: generate makes one, puts it in and keeps it."
