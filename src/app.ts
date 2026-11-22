@@ -327,7 +327,13 @@ const tabWidget: WidgetDef = {
     preferred: { cols: 6, rows: 4 },
     grows: true,
   },
-  a2ui: () => mcpApp("tab", { title: "Tab", html, allowedTools: [`${APP}_view`, `${APP}_input`] }),
+  a2ui: () =>
+    mcpApp("tab", {
+      title: "Tab",
+      html,
+      toolInput: "/input",
+      allowedTools: [`${APP}_view`, `${APP}_input`],
+    }),
 }
 
 export const browserApp = defineApp({
