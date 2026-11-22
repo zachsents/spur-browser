@@ -147,6 +147,7 @@ const actTool = tool(
       pick: optionalString,
       account: optionalString,
       otp: optionalString,
+      backgroundOnly: optionalBoolean,
       keys: optionalString,
       repeat: optionalNumber,
       button: Schema.optionalKey(Schema.Literals(["left", "right", "middle"])),

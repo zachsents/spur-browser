@@ -246,7 +246,11 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
   const submit = args.submit !== false
   const { url } = await tab.info()
   const host = accounts.hostOf(url)
-  const stored = await vaultLogin(named, url)
+  const codeOnly = otp !== null && named === null
+  const stored = codeOnly ? null : await vaultLogin(named, url)
+  if (args.backgroundOnly === true && stored === null && otp === null) {
+    throw new Error("Private saved sign-in unavailable in the background")
+  }
   const browser = fromBrowser(stored ? null : named, host)
   const source: Source = stored ? fromVault(stored) : browser
   const username = stored ? keeper.plain(stored, "username") : undefined
@@ -256,7 +260,9 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
   let picked = false
   let ending = ""
   const wants = (f: Field) =>
-    !filled.has(f.kind) && (source.has(f.kind) || (f.kind === "code" && otp !== null))
+    (!codeOnly || f.kind === "code") &&
+    !filled.has(f.kind) &&
+    (source.has(f.kind) || (f.kind === "code" && otp !== null))
   for (let round = 0; round < ROUNDS; round += 1) {
     // After the first page, the next one's fields may come a beat after the last one's went.
     const started = Date.now()
@@ -307,7 +313,7 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       break
     }
     const said: string[] = []
-    const mine = left.filter((f) => source.has(f.kind))
+    const mine = left.filter((f) => source.has(f.kind) && (f.kind !== "code" || otp === null))
     try {
       said.push(...(await source.fill(tab, mine)))
     } catch (error) {
@@ -319,7 +325,7 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
     for (const f of mine) {
       filled.add(f.kind)
     }
-    const code = left.find((f) => f.kind === "code" && !source.has("code"))
+    const code = left.find((f) => f.kind === "code" && (otp !== null || !source.has("code")))
     if (code && otp !== null) {
       const held = await putCode(tab, code, otp)
       if (held === 0) {
