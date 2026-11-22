@@ -108,19 +108,22 @@ const input = (args: Record<string, unknown>) => {
     return
   }
   busyUntil = Date.now() + 5000
-  callTool("input", { session, ...args }).catch(ignore)
+  callTool("input", { session, ...args }).catch(() => {
+    say("Input failed")
+  })
 }
 
 /** A point on the picture, in the page's own coordinates. */
 const pointOf = (e: MouseEvent) => {
   const r = img?.getBoundingClientRect()
-  if (!r || r.width === 0) {
+  if (!r || r.width === 0 || r.height === 0) {
     return null
   }
-  return {
-    x: ((e.clientX - r.left) / r.width) * width,
-    y: ((e.clientY - r.top) / r.height) * height,
-  }
+  // object-fit: contain centers the picture inside the image element's box.
+  const scale = Math.min(r.width / width, r.height / height)
+  const x = (e.clientX - r.left - (r.width - width * scale) / 2) / scale
+  const y = (e.clientY - r.top - (r.height - height * scale) / 2) / scale
+  return x < 0 || y < 0 || x >= width || y >= height ? null : { x, y }
 }
 
 img?.addEventListener("click", (e) => {
@@ -134,7 +137,12 @@ img?.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault()
-    input({ kind: "scroll", dy: e.deltaY * (height / (img.getBoundingClientRect().height || 1)) })
+    const at = pointOf(e)
+    if (at) {
+      const r = img.getBoundingClientRect()
+      const scale = Math.min(r.width / width, r.height / height)
+      input({ kind: "scroll", ...at, dy: e.deltaY / scale })
+    }
   },
   { passive: false },
 )
