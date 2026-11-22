@@ -80,7 +80,7 @@ export const redact = (text: string) => {
 
 /** Query parameters whose values are credentials. */
 const SECRET_PARAM =
-  /(?<name>[?&#](?:[a-z_]*token|[a-z_]*key|secret|password|passwd|auth[a-z_]*|code|sig|signature|session[a-z_]*|credential[a-z_]*)=)[^&#]*/giu
+  /(?<name>[?&#](?:[a-z_]*token|[a-z_]*key|secret|password|passwd|auth[a-z_]*|code|state|code_verifier|code_challenge|sig|signature|session[a-z_]*|credential[a-z_]*)=)[^&#]*/giu
 
 /** A URL with the values of credential-like query parameters hidden. */
 export const redactUrl = (url: string) => url.replaceAll(SECRET_PARAM, "$<name>…")

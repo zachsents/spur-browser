@@ -277,6 +277,9 @@ export const signIn = async (tab: Tab, args: Json): Promise<Done> => {
       )
       if (refused.length > 0) {
         ending = `The page still shows the ${refused.join(" and ")} field after it was sent, so it was likely refused or didn't go; I didn't fill it again (that can lock an account). Read the page for why.`
+      } else if (found.some((f) => f.kind === "code")) {
+        ending =
+          "A verification code is required. Use challenge with a matching private email/text source and an authenticated page check; never ask for a code in chat or an ordinary task."
       } else if (found.some((f) => f.kind === "new password")) {
         ending =
           "The page wants a new password: save_account with password: generate makes one, puts it in and keeps it."

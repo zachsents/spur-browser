@@ -8,8 +8,9 @@ import { hostname } from "node:os"
 
 import { Effect, Queue, Schema } from "effect"
 import { AppEvents, answer, defineApp, defineEvent, mcpApp, Models, tool } from "switch-ext-kit"
-import type { WidgetDef } from "switch-ext-kit"
+import type { WidgetDef, ModelsService, AsksService } from "switch-ext-kit"
 
+import { challengeTools } from "./challenge.ts"
 import * as chrome from "./chrome.ts"
 import type { Json } from "./chrome.ts"
 import { redact, redactUrl } from "./guard.ts"
@@ -336,12 +337,12 @@ const tabWidget: WidgetDef = {
     }),
 }
 
-export const browserApp = defineApp({
+export const browserApp = defineApp<ModelsService | AsksService>({
   name: APP,
   version: "3",
   instructions:
     "The user's own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a login in the user's vault or the browser's saved passwords, and fill_secret puts a vault secret in a field. A tab held for the user (an approval, a code, a human check) shows in the tab widget, which they drive from wherever they are. Release sessions when done.",
-  tools: [runTool, actTool, secretTool, viewTool, inputTool],
+  tools: [runTool, actTool, secretTool, viewTool, inputTool, ...challengeTools],
   events: [PageEvent],
   widgets: [tabWidget],
 })
