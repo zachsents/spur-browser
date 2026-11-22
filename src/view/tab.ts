@@ -60,6 +60,15 @@ const ignore = () => {
 }
 
 let session = ""
+let initialized = false
+let inputReceived = false
+let framesStarted = false
+const startFrames = () => {
+  if (initialized && inputReceived && !framesStarted) {
+    framesStarted = true
+    frameLoop().catch(ignore)
+  }
+}
 let width = 1
 let height = 1
 let busyUntil = 0
@@ -179,14 +188,17 @@ window.addEventListener(
       if (isRecord(args) && typeof args.session === "string") {
         ;({ session } = args)
       }
+      inputReceived = true
+      startFrames()
       return
     }
     if (typeof e.data.id !== "number") {
       return
     }
     if (e.data.id === 1 && e.data.result !== undefined) {
+      initialized = true
       post({ method: "ui/notifications/initialized" })
-      frameLoop().catch(ignore)
+      startFrames()
       return
     }
     const settle = pending.get(e.data.id)
