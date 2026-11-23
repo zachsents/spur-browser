@@ -135,6 +135,19 @@
   const inViewport = (r) =>
     r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth
 
+  /**
+   * The middle of the part of a box (top viewport) inside the viewport, or null when none of it
+   * is: where a hit test can look, since nothing outside the viewport answers one.
+   */
+  function shownMiddle(r) {
+    const left = Math.max(r.left, 0)
+    const top = Math.max(r.top, 0)
+    const right = Math.min(r.right, innerWidth)
+    const bottom = Math.min(r.bottom, innerHeight)
+    if (right - left < 1 || bottom - top < 1) return null
+    return { x: (left + right) / 2, y: (top + bottom) / 2 }
+  }
+
   /** Pixels between the element and the viewport (0 when visible). */
   function distance(el) {
     const r = rectOf(el)
@@ -530,9 +543,11 @@
           const r = rectOf(el)
           if (r.width < 4 || r.height < 4) return false
           const shown = el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
-          if (!inViewport(r) || clippedByContainer(el)) return shown
+          // Only its part in view can be hit-tested (an element across the fold too); off screen, it's scrolled to before acting
+          const middle = shownMiddle(r)
+          if (!middle || clippedByContainer(el)) return shown
           // On screen but covered by something else (a modal, a sticky header)
-          if (!reachable(el, r.left + r.width / 2, r.top + r.height / 2)) return false
+          if (!reachable(el, middle.x, middle.y)) return false
           if (!shown) hoverOnly.add(el)
           return true
         },

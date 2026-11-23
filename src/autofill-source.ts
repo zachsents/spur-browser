@@ -3,6 +3,7 @@
 // the browser's own process, so the browser fills the field and nothing secret passes through the
 // extension. Ported from Switchboard's autofill.rs.
 //   autofill fill <json>       {pid, pick?}: {labels, chose?}
+//   autofill match <json>      {pick, labels}: {index, chose}, how fill picks, without a browser
 // Labels are what the suggestions say (a username, a card's last digits), never a password.
 export const source = String.raw`
 import Cocoa
@@ -130,6 +131,63 @@ func choose(_ row: AXUIElement) -> Bool {
   return false
 }
 
+/** Runs of letters and runs of digits, lowercased, each once: "Visa ••5269" is visa, 5269. */
+func words(_ s: String) -> Set<String> {
+  var found = Set<String>()
+  var run = ""
+  var digits = false
+  for ch in s.lowercased() {
+    let digit = ch.isWholeNumber
+    let part = digit || ch.isLetter
+    if !run.isEmpty && (!part || digit != digits) {
+      found.insert(run)
+      run = ""
+    }
+    if part {
+      run.append(ch)
+      digits = digit
+    }
+  }
+  if !run.isEmpty { found.insert(run) }
+  return found
+}
+
+/**
+ * Whether a label holds every word of a pick, in any order or case: a number as the end of one of
+ * its numbers (a card's last four), a word as the start of one of its words; else the pick as a
+ * part of it (a username's).
+ */
+func holds(_ label: String, _ pick: String) -> Bool {
+  let wanted = words(pick)
+  if wanted.isEmpty { return false }
+  let has = words(label)
+  let all = wanted.allSatisfy { w in
+    has.contains { w.first?.isWholeNumber == true ? $0.hasSuffix(w) : $0.hasPrefix(w) }
+  }
+  return all || folded(label).contains(folded(pick))
+}
+
+/** The suggestions a pick names. */
+func matching(_ pick: String, _ labels: [String]) -> [Int] {
+  labels.indices.filter { holds(labels[$0], pick) }
+}
+
+/** Text as an error shows it: a card's whole number cut to its last four. */
+func masked(_ text: String) -> String {
+  let re = try! NSRegularExpression(pattern: "[0-9](?:[ -]?[0-9]){11,}")
+  var out = text
+  for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+    guard let r = Range(m.range, in: out) else { continue }
+    let digits = out[r].filter { $0.isWholeNumber }
+    out.replaceSubrange(r, with: "\u{2022}\u{2022}" + digits.suffix(4))
+  }
+  return out
+}
+
+func mismatch(_ pick: String, _ labels: [String], _ matches: [Int]) -> String {
+  (matches.isEmpty ? "None" : "More than one") + " of the browser's suggestions match \"" + masked(pick) + "\"; it offers: " + labels.map(masked).joined(separator: "; ")
+}
+
 func fill(_ pid: pid_t, _ pick: String?) {
   if !AXIsProcessTrusted() { fail("Accessibility is off for the app this runs under") }
   let app = AXUIElementCreateApplication(pid)
@@ -149,11 +207,10 @@ func fill(_ pid: pid_t, _ pick: String?) {
     out(["labels": labels])
     return
   }
-  let wanted = folded(pick)
-  let matches = labels.indices.filter { !wanted.isEmpty && folded(labels[$0]).contains(wanted) }
+  let matches = matching(pick, labels)
   guard matches.count == 1, let i = matches.first else {
     press(app, ESCAPE)
-    fail((matches.isEmpty ? "None" : "More than one") + " of the browser's suggestions match; it offers: " + labels.joined(separator: "; "))
+    fail(mismatch(pick, labels, matches))
   }
   // The browser ignores a pick that comes too soon after its suggestions open.
   let wait = 0.8 + shown.timeIntervalSinceNow
@@ -173,6 +230,14 @@ case "fill":
   let given = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] ?? [:]
   guard let pid = given["pid"] as? Int else { fail("No pid") }
   fill(pid_t(pid), given["pick"] as? String)
+case "match":
+  let raw = args.count > 2 ? args[2] : "{}"
+  let given = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] ?? [:]
+  let pick = given["pick"] as? String ?? ""
+  let labels = given["labels"] as? [String] ?? []
+  let matches = matching(pick, labels)
+  guard matches.count == 1, let i = matches.first else { fail(mismatch(pick, labels, matches)) }
+  out(["index": i, "chose": labels[i]])
 default:
   fail("No such op")
 }

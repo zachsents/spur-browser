@@ -32,5 +32,6 @@ Accessibility belongs to the app the host runs under (for `sign_in` and `autofil
 ```sh
 bun install
 bun run check
+bun test        # needs Chrome and swiftc
 bun start   # serves MCP on stdio
 ```
