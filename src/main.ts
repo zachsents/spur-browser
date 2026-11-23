@@ -8,9 +8,12 @@ import { AppEvents, Models, serve } from "switch-ext-kit"
 import { browserApp, watch } from "./app.ts"
 import { install, serve as listen } from "./chrome.ts"
 import { register } from "./keeper.ts"
+import { prepare } from "./portal.ts"
 
 install()
 listen()
+// The screen engine an ask's live view needs, built once per version.
+prepare()
 // The vault keeps its secrets: the browser says it's here, so the user can allow it.
 void register()
 await Effect.runPromise(

@@ -21,6 +21,7 @@ import { tabHtml } from "./view/build.ts"
 import { act, OPS } from "./ops.ts"
 import { askedField, guard, marked } from "./personal.ts"
 import type { Decide, Done } from "./common.ts"
+import * as portal from "./portal.ts"
 import { run } from "./run.ts"
 import type { Tab } from "./tab.ts"
 
@@ -314,6 +315,29 @@ const inputTool = tool(
     }),
 )
 
+const portalTool = tool(
+  "portal",
+  {
+    description:
+      "An ask's live view of this Mac's screen, for the core to relay to the user's apps: open (watch to show it, control to drive it, with the session's tab brought to the front first) or close a view.",
+    appOnly: true,
+    input: Schema.Struct({
+      op: Schema.Literals(["open", "close"]),
+      session: optionalString,
+      scope: Schema.optionalKey(Schema.Literals(["watch", "control"])),
+      grant: optionalString,
+    }),
+  },
+  (input) =>
+    task(async () => {
+      if (input.op === "close") {
+        await portal.close(input.grant ?? "")
+        return { closed: true }
+      }
+      return { ...(await portal.open(input.session ?? DEFAULT_SESSION, input.scope ?? "watch")) }
+    }),
+)
+
 // Built when the extension starts: Bun runs no macros from an installed package.
 const html = tabHtml(APP)
 
@@ -342,8 +366,8 @@ export const browserApp = defineApp<ModelsService | AsksService>({
   name: APP,
   version: "3",
   instructions:
-    "The user's own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a login in the user's vault or the browser's saved passwords, and fill_secret puts a vault secret in a field. A tab held for the user (an approval, a code, a human check) shows in the tab widget, which they drive from wherever they are. Release sessions when done.",
-  tools: [runTool, actTool, secretTool, viewTool, inputTool, ...challengeTools],
+    'The user\'s own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a login in the user\'s vault or the browser\'s saved passwords, and fill_secret puts a vault secret in a field. When the step left is the user\'s own in a tab (a CAPTCHA or other human check, which you never solve; a sign-in only they can finish; a passkey), fill everything else, hold the tab (act\'s hold), and put up an action item with a live view: portal {"app": "browser", "session": "<session>"}. Its card shows this Mac\'s screen live in both apps, their iPhone included, wherever they are; opening it brings that tab to the front, and they click, drag, scroll and type in it. A notification about it opens it. Add a resolve_when that finds the page past the check when you can. Nothing in it is kept. Release sessions when done.',
+  tools: [runTool, actTool, secretTool, viewTool, inputTool, portalTool, ...challengeTools],
   events: [PageEvent],
   widgets: [tabWidget],
 })
