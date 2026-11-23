@@ -3,7 +3,7 @@
 // connection and says what's in front.
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio"
 import { Effect, Layer } from "effect"
-import { AppEvents, Models, serve } from "switch-ext-kit"
+import { AppEvents, Models, OUTBOX_FILE, serve } from "switch-ext-kit"
 
 import { browserApp, watch } from "./app.ts"
 import { install, serve as listen } from "./chrome.ts"
@@ -23,7 +23,9 @@ await Effect.runPromise(
       yield* Effect.forkScoped(watch)
       yield* done
     }),
-  ).pipe(Effect.provide(Layer.provideMerge(Models.layer, AppEvents.layer(browserApp)))),
+  ).pipe(
+    Effect.provide(Layer.provideMerge(Models.layer, AppEvents.layer(browserApp, OUTBOX_FILE))),
+  ),
 )
 // The host went: the socket the browser connects to goes with this process.
 process.exit(0)
