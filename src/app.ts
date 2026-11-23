@@ -44,7 +44,39 @@ export const PageEvent = defineEvent(
   }),
 )
 
-/** Emits each change of what's in front, as the extension says it. */
+/** Whether this sense works: the bridge to the browser's extension, `chrome.bridge`. */
+export const Heartbeat = defineEvent(
+  "browser.heartbeat",
+  1,
+  Schema.Struct({
+    entity: Schema.String,
+    summary: Schema.String,
+    facts: Schema.Struct({
+      failing: Schema.NullOr(Schema.String),
+      machine: Schema.String,
+      browser: Schema.NullOr(Schema.String),
+      connected: Schema.Boolean,
+      open: Schema.Boolean,
+      tabs: Schema.optionalKey(Schema.Finite),
+    }),
+  }),
+)
+
+const LOOK_MS = 60_000
+const BEAT_MS = 5 * 60_000
+
+const summaryOf = (b: chrome.Bridge) => {
+  if (b.failing !== null) {
+    return b.failing
+  }
+  return b.connected && b.browser !== null ? `In ${b.browser}` : "No browser open"
+}
+
+/**
+ * Emits each change of what's in front, as the extension says it, and the heartbeat: the bridge
+ * looked at each minute, a beat every five and at once when what's failing changes. Both come from
+ * this one loop, so the beat stops if it does.
+ */
 export const watch = Effect.gen(function* watching() {
   const events = yield* AppEvents
   const pages = yield* Queue.unbounded<chrome.Page>()
@@ -52,13 +84,29 @@ export const watch = Effect.gen(function* watching() {
     Queue.offerUnsafe(pages, page)
   })
   let last = ""
+  let lookedAt = 0
+  let sent: string | null = null
+  let sentAt = 0
   for (;;) {
-    const page = yield* Queue.take(pages)
-    const payload = { machine, ...page, url: redactUrl(page.url) }
-    const key = JSON.stringify(payload)
-    if (key !== last) {
-      last = key
-      yield* Effect.ignore(events.emit({ type: PageEvent.type, payload }))
+    const page = yield* Effect.timeoutOption(Queue.take(pages), LOOK_MS)
+    if (page._tag === "Some") {
+      const payload = { machine, ...page.value, url: redactUrl(page.value.url) }
+      const key = JSON.stringify(payload)
+      if (key !== last) {
+        last = key
+        yield* Effect.ignore(events.emit({ type: PageEvent.type, payload }))
+      }
+    }
+    if (Date.now() - lookedAt >= LOOK_MS) {
+      lookedAt = Date.now()
+      const b = yield* Effect.promise(chrome.bridge)
+      if (sentAt === 0 || b.failing !== sent || Date.now() - sentAt >= BEAT_MS) {
+        sent = b.failing
+        sentAt = Date.now()
+        const facts = { ...b, machine }
+        const beat = { entity: "sense:browser", summary: summaryOf(b), facts }
+        yield* Effect.ignore(events.emit(Heartbeat.make(beat)))
+      }
     }
   }
 })
@@ -368,6 +416,6 @@ export const browserApp = defineApp<ModelsService | AsksService>({
   instructions:
     'The user\'s own browser on this Mac, signed in as they are there, in background tabs. run does routine web tasks with a decision model; act is exact control: its sign_in signs in from a login in the user\'s vault or the browser\'s saved passwords, and fill_secret puts a vault secret in a field. When the step left is the user\'s own in a tab (a CAPTCHA or other human check, which you never solve; a sign-in only they can finish; a passkey), fill everything else, hold the tab (act\'s hold), and put up an action item with a live view: portal {"app": "browser", "session": "<session>"}. Its card shows this Mac\'s screen live in both apps, their iPhone included, wherever they are; opening it brings that tab to the front, and they click, drag, scroll and type in it. A notification about it opens it. Add a resolve_when that finds the page past the check when you can. Nothing in it is kept. Release sessions when done.',
   tools: [runTool, actTool, secretTool, viewTool, inputTool, portalTool, ...challengeTools],
-  events: [PageEvent],
+  events: [PageEvent, Heartbeat],
   widgets: [tabWidget],
 })

@@ -187,6 +187,9 @@ const heard = (link: Link, message: Json) => {
     }
   } else if (type === "hello") {
     link.release = str(message.release)
+    if (link.browser !== null) {
+      keepHost(link.browser.bundle)
+    }
     // An extension older than the files just written reloads itself from them.
     if (message.version !== version) {
       send(link, { type: "reload" })
@@ -261,6 +264,119 @@ export const call = async (method: string, params: Json, ms = 30_000): Promise<u
 }
 
 const running = async (name: string) => (await Bun.spawn(["pgrep", "-x", name]).exited) === 0
+
+/** The browser the extension last said hello from, kept across restarts. */
+const HOST_FILE = path.join(HOME, "host")
+
+const keepHost = (bundle: string) => {
+  try {
+    if (!existsSync(HOST_FILE) || readFileSync(HOST_FILE, "utf-8") !== bundle) {
+      writeFileSync(HOST_FILE, bundle)
+    }
+  } catch {
+    // Only the heartbeat reads it: it guesses from what's installed without it.
+  }
+}
+
+const host = () => {
+  try {
+    const bundle = readFileSync(HOST_FILE, "utf-8").trim()
+    return CHROMIUM.find((b) => b.bundle === bundle) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The extension's bridge as the heartbeat says it. */
+export interface Bridge {
+  /** What's wrong now, or null. */
+  readonly failing: string | null
+  readonly browser: string | null
+  readonly connected: boolean
+  /** The browser it should be in is open. */
+  readonly open: boolean
+  /** Its tabs, when it answered. */
+  readonly tabs?: number
+}
+
+/** Up this long without the extension's hands before it counts: it connects within a minute. */
+const GRACE_MS = 3 * 60_000
+let missingSince: number | null = null
+/** Calls in a row the browser didn't answer; one is a busy moment, two a failure. */
+let unanswered = 0
+
+/**
+ * Whether the bridge works: with hands, the browser answers a call (`tabs`, which reads only);
+ * without, it's failing only while the browser the extension lives in (else any here that can run
+ * it) has been open a few minutes. A closed browser is no failure: reach opens it when needed.
+ */
+const look = async (): Promise<Bridge> => {
+  const b = browser()
+  if (hasHands()) {
+    missingSince = null
+    const name = b?.name ?? null
+    try {
+      const tabs = await call("tabs", {}, 15_000)
+      unanswered = 0
+      return {
+        failing: null,
+        browser: name,
+        connected: true,
+        open: true,
+        ...(Array.isArray(tabs) && { tabs: tabs.length }),
+      }
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error)
+      unanswered += 1
+      return {
+        failing: unanswered >= 2 ? `The Switch extension in the browser: ${why}` : null,
+        browser: name,
+        connected: true,
+        open: true,
+      }
+    }
+  }
+  unanswered = 0
+  const here = installed()
+  const known = host()
+  const expected = known !== null && here.includes(known) ? [known] : here
+  if (expected.length === 0) {
+    missingSince = null
+    return {
+      failing: "No browser on this Mac can run the Switch extension",
+      browser: null,
+      connected: false,
+      open: false,
+    }
+  }
+  const up = await Promise.all(expected.map(async (e) => await running(e.name)))
+  const open = expected.find((_, i) => up[i] === true) ?? null
+  if (open === null) {
+    missingSince = null
+    return { failing: null, browser: null, connected: connected(), open: false }
+  }
+  missingSince ??= Date.now()
+  const late = Date.now() - missingSince >= GRACE_MS
+  const failing = connected()
+    ? `The Switch extension in ${open.name} hasn't said hello`
+    : `The Switch extension isn't connected in ${open.name}`
+  return { failing: late ? failing : null, browser: open.name, connected: connected(), open: true }
+}
+
+/** The bridge as `look` finds it; a look that fails is said as what's failing. */
+export const bridge = async (): Promise<Bridge> => {
+  try {
+    return await look()
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error)
+    return {
+      failing: `Couldn't look at the browser: ${why}`,
+      browser: null,
+      connected: connected(),
+      open: false,
+    }
+  }
+}
 
 /**
  * Makes sure the extension is there to drive a browser: when no browser that can run it is up, the
