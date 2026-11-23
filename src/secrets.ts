@@ -7,13 +7,14 @@
 // secret.rs.
 import * as chrome from "./chrome.ts"
 import type { Json } from "./chrome.ts"
-import { browserFills, done, nowOn, num, str } from "./common.ts"
+import { browserFills, done, nowOn, num, str, whatAt } from "./common.ts"
 import type { Done } from "./common.ts"
 import { luhn, redactUrl } from "./guard.ts"
 import { hostOf } from "./accounts.ts"
 import * as keeper from "./keeper.ts"
 import { dropSession, session } from "./session.ts"
-import { parseKey, Tab } from "./tab.ts"
+import { FRAME_FIELD, parseKey, Tab } from "./tab.ts"
+import type { Target } from "./ops.ts"
 
 /** The vault's secrets that aren't logins, as the secret tool lists them. */
 export const list = async () => {
@@ -66,19 +67,75 @@ const shaped = (secret: string, args: Json) => {
   return out
 }
 
+/**
+ * `fill_secret` into a text box inside another site's frame (a card form's secure boxes), at a
+ * point: checked by its length after, and sealed. Null when the point isn't on such a frame.
+ */
+const fillInFrame = async (
+  tab: Tab,
+  args: Json,
+  at: { x: number; y: number },
+  what: string,
+): Promise<Done | null> => {
+  const name = str(args.secret).trim()
+  const { url } = await tab.info()
+  const frame = await tab.foreignFrame(at)
+  if (frame === null) {
+    return null
+  }
+  const released = await keeper.release({ ref: name }, url)
+  const [part = ""] = Object.keys(released.values)
+  const put = shaped(released.values[part] ?? "", args)
+  const { held, world } = await tab.fillInFrame(frame, at, put)
+  // A field that spaces a card's digits out holds more characters, but the same digits.
+  const digits = put.replaceAll(/\D/gu, "").length
+  if (held.length !== put.length && !(digits > 0 && held.digits === digits)) {
+    await world(FRAME_FIELD.empty)
+    throw new Error(
+      `The box in ${what} held ${held.length} characters after filling ${name}, not its ${put.length}: the field cuts or changes it, so I emptied it again (format or slice shapes it)`,
+    )
+  }
+  const now = await tab.info()
+  if (hostOf(now.url) !== hostOf(url)) {
+    throw new Error(
+      `The tab went to ${redactUrl(now.url)} while ${name} was going in, so I stopped there`,
+    )
+  }
+  await world(FRAME_FIELD.seal)
+  return done(
+    `Filled the box in ${what} with ${name} (${released.title}, ${released.labels[part] ?? part}, ${put.length} characters). Nothing reads it back.\n${await nowOn(tab)}`,
+  )
+}
+
 /** `fill_secret`: one of the vault's secrets into a field, checked by its length after, and sealed. */
-export const fillSecret = async (tab: Tab, args: Json, n: number): Promise<Done> => {
+export const fillSecret = async (tab: Tab, args: Json, t: Target): Promise<Done> => {
   const name = str(args.secret).trim()
   if (name === "") {
     throw new Error(
       "fill_secret needs secret: a reference to one of the vault's secrets, like card/main.number (the secret tool lists them)",
     )
   }
+  if (!("element" in t)) {
+    const inFrame = await fillInFrame(tab, args, t, await whatAt(tab, t))
+    if (inFrame === null) {
+      throw new Error(
+        "fill_secret at a point fills a text box inside another site's frame; name a page's own field by element or match",
+      )
+    }
+    return inFrame
+  }
+  const n = t.element
   const { url } = await tab.info()
   const fp = tab.known(n)
   const field = await tab.pageJson(`field(${n}, ${fp})`)
   const fieldLine = str(field.line) || "the field"
   const dropdown = field.tag === "select"
+  if (field.foreign === true) {
+    const inFrame = await fillInFrame(tab, args, await tab.point(n), fieldLine)
+    if (inFrame !== null) {
+      return inFrame
+    }
+  }
   if (!dropdown && field.editable !== true) {
     throw new Error(
       `${fieldLine} isn't a field that can be filled: name the text box or dropdown itself`,

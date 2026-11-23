@@ -97,7 +97,7 @@ const matcher = (pattern: string) => {
   }
 }
 
-type Target = { readonly element: number } | { readonly x: number; readonly y: number }
+export type Target = { readonly element: number } | { readonly x: number; readonly y: number }
 
 export const targeted = (args: Json) =>
   num(args.element) !== null ||
@@ -617,7 +617,7 @@ const one = async (tab: Tab, args: Json, decide: Decide): Promise<Done> => {
       return await signIn(tab, args)
     }
     case "fill_secret": {
-      return await fillSecret(tab, args, await elementOf(tab, args, "fill_secret"))
+      return await fillSecret(tab, args, await target(tab, args))
     }
     case "save_account": {
       return await saveAccount(

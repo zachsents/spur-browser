@@ -861,6 +861,7 @@
       return { editable: false, sensitive: null, tag: null, multiline: false }
     return {
       editable: isHtml(el) && editable(el),
+      foreign: (el.tagName === "IFRAME" || el.tagName === "FRAME") && !frameDocument(el),
       sensitive: sensitive(el) || null,
       tag: el.tagName.toLowerCase(),
       type: el.type ?? null,

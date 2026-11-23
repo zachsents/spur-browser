@@ -238,6 +238,49 @@ const pageError = (details: Json) => {
 const clamp = (v: number, hi: number) => Math.min(Math.max(v, 0), hi)
 
 /** A session's tab, with its gate held: every op on it goes through here. */
+/** A frame from another site in the tab, and its own debugger session when it has one. */
+export interface Frame {
+  readonly frameId: string
+  readonly session: string | null
+}
+
+/**
+ * What runs in a frame's world (`frameWorld`) around a fill: the focused text box is marked (an
+ * attribute, which every world sees), then counted, sealed (dots in screenshots) or emptied, never read.
+ */
+export const FRAME_FIELD = {
+  mark: `(() => {
+    let el = document.activeElement
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement
+    const editable = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && !el.readOnly && !el.disabled
+    for (const old of document.querySelectorAll("[data-switch-fill]")) old.removeAttribute("data-switch-fill")
+    if (editable) el.setAttribute("data-switch-fill", "")
+    return { editable }
+  })()`,
+  held: `(() => {
+    const el = document.querySelector("[data-switch-fill]")
+    const value = el ? el.value : ""
+    return { length: value.length, digits: (value.match(/\\d/g) || []).length }
+  })()`,
+  seal: `(() => {
+    const el = document.querySelector("[data-switch-fill]")
+    if (!el) return {}
+    el.style.setProperty("-webkit-text-security", "disc", "important")
+    el.setAttribute("data-switch-sealed", "")
+    el.removeAttribute("data-switch-fill")
+    return {}
+  })()`,
+  empty: `(() => {
+    const el = document.querySelector("[data-switch-fill]")
+    if (!el) return {}
+    const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, "")
+    el.dispatchEvent(new Event("input", { bubbles: true }))
+    el.removeAttribute("data-switch-fill")
+    return {}
+  })()`,
+}
+
 export class Tab {
   readonly s: Session
 
@@ -641,6 +684,95 @@ export class Tab {
       }
     }
     return held
+  }
+
+  /**
+   * Another site's frame at a point (a card form's secure box), which the page script can't reach:
+   * its frame id, and its own debugger session when it runs in a process of its own. Null when the
+   * point isn't on one.
+   */
+  async foreignFrame(at: { x: number; y: number }): Promise<Frame | null> {
+    const hit = await this.cdp("DOM.getNodeForLocation", {
+      x: Math.round(at.x),
+      y: Math.round(at.y),
+      includeUserAgentShadowDOM: false,
+      ignorePointerEventsNone: true,
+    })
+    const backendNodeId = num(hit.backendNodeId)
+    if (backendNodeId === null) {
+      return null
+    }
+    const described = await this.cdp("DOM.describeNode", { backendNodeId })
+    const node = isJson(described.node) ? described.node : {}
+    const frameId = str(node.frameId)
+    if (!/^i?frame$/iu.test(str(node.nodeName)) || frameId === "") {
+      return null
+    }
+    const own = await chrome.call(
+      "frame",
+      { session: this.s.name, group: this.s.group, frameId },
+      CDP_MS,
+    )
+    return { frameId, session: typeof own === "string" ? own : null }
+  }
+
+  /** Runs expressions in a world of this extension's own inside a frame (`foreignFrame`). */
+  async frameWorld(frame: Frame) {
+    const send = async (method: string, params: Json) => {
+      const r =
+        frame.session === null
+          ? await this.cdp(method, params)
+          : await chrome.call(
+              "cdp",
+              { session: this.s.name, group: this.s.group, method, params, frame: frame.session },
+              CDP_MS,
+            )
+      return isJson(r) ? r : {}
+    }
+    const made = await send("Page.createIsolatedWorld", {
+      frameId: frame.frameId,
+      worldName: "switch-frame",
+    })
+    const contextId = num(made.executionContextId)
+    if (contextId === null) {
+      throw new Error("Chrome made no world in the frame")
+    }
+    return async (expression: string) => {
+      const reply = await send("Runtime.evaluate", { expression, contextId, returnByValue: true })
+      if (isJson(reply.exceptionDetails)) {
+        throw new Error(pageError(reply.exceptionDetails))
+      }
+      const result = isJson(reply.result) ? reply.result : {}
+      return isJson(result.value) ? result.value : {}
+    }
+  }
+
+  /**
+   * Replaces the text of the field at a point inside another site's frame with a secret, the way
+   * `fillHidden` does a page's own: clicked into, then put in at once, or key by key when the field
+   * drops that. Says how many characters and digits it then holds, never what they are, and gives
+   * the frame's world back for sealing or emptying it.
+   */
+  async fillInFrame(frame: Frame, at: { x: number; y: number }, text: string) {
+    await this.clickAt(at)
+    await Bun.sleep(150)
+    const world = await this.frameWorld(frame)
+    const focused = await world(FRAME_FIELD.mark)
+    if (focused.editable !== true) {
+      throw new Error("Clicking there put the cursor in no text box inside the frame")
+    }
+    let held = { length: 0, digits: 0 }
+    for (const keystrokes of [false, true]) {
+      await this.press(parseKey("cmd+a"))
+      await this.press(parseKey("Backspace"))
+      await (keystrokes ? this.keystrokes(text) : this.insert(text))
+      const read = await world(FRAME_FIELD.held)
+      held = { length: num(read.length) ?? 0, digits: num(read.digits) ?? 0 }
+      if (held.length > 0) {
+        break
+      }
+    }
+    return { held, world }
   }
 
   /** Wheel scrolling at a point in a few eased steps, like a person's scroll. */

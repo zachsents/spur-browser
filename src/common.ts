@@ -48,24 +48,14 @@ export const whatAt = async (tab: Tab, at: { x: number; y: number }) => {
   return typeof v === "string" ? v : `the point (${Math.round(at.x)}, ${Math.round(at.y)})`
 }
 
-/** Seconds of no input before a Mac counts as nobody's at it, so bringing a tab forward disturbs no one. */
-const AWAY_S = 60
-
 /**
  * The browser's own suggestions for the field at a point: the tab brought to the front for a
  * moment (the browser shows them only there) and, with `pick`, one filled; then it goes back.
- * Refused while someone's using this Mac, since it would take the front of their screen.
  */
 export const browserFills = async (tab: Tab, at: { x: number; y: number }, pick: string | null) => {
   const b = chrome.browser()
   if (typeof b?.pid !== "number") {
     throw new TypeError("The Switch extension's browser didn't say which process it is")
-  }
-  const { idle } = await autofill.idle()
-  if (idle < AWAY_S && process.env.SWITCH_BROWSER_FRONT !== "1") {
-    throw new Error(
-      "Someone's using this Mac, and filling from the browser would bring it to the front: try again when it's idle, or on another Mac",
-    )
   }
   await chrome.call("show", { session: tab.name }, 10_000)
   try {

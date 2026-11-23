@@ -49,12 +49,6 @@ const run = async (args: readonly string[]) => {
   return value
 }
 
-/** Seconds since the last input on this Mac, and whether its screen is locked. */
-export const idle = async () => {
-  const v = await run(["idle"])
-  return { idle: typeof v.idle === "number" ? v.idle : 0, locked: v.locked === true }
-}
-
 export interface Offered {
   readonly labels: readonly string[]
   readonly chose: string | null

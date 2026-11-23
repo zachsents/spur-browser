@@ -2,7 +2,6 @@
 // passwords, cards, addresses) for the field in focus, opened and picked through Accessibility in
 // the browser's own process, so the browser fills the field and nothing secret passes through the
 // extension. Ported from Switchboard's autofill.rs.
-//   autofill idle              {idle: seconds since the last input, locked}
 //   autofill fill <json>       {pid, pick?}: {labels, chose?}
 // Labels are what the suggestions say (a username, a card's last digits), never a password.
 export const source = String.raw`
@@ -35,10 +34,6 @@ func locked() -> Bool {
   if let v = session?["CGSSessionScreenIsLocked"] as? Bool { return v }
   if let v = session?["CGSSessionScreenIsLocked"] as? Int { return v != 0 }
   return false
-}
-
-func idle() -> Double {
-  CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
 }
 
 func key(_ code: CGKeyCode) {
@@ -173,8 +168,6 @@ func fill(_ pid: pid_t, _ pick: String?) {
 
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "" {
-case "idle":
-  out(["idle": idle(), "locked": locked()])
 case "fill":
   let raw = args.count > 2 ? args[2] : "{}"
   let given = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] ?? [:]

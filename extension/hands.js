@@ -20,6 +20,8 @@ const AWAY_S = 15 * 60
 const used = new Map()
 const started = Date.now()
 const attached = new Set()
+/** Other sites' frames in each tab (a card form's secure boxes), as debugger sessions: tab → frame id → session. */
+const frameSessions = new Map()
 /** Tabs being closed by a session, whose "Leave site?" prompt is accepted. */
 const closing = new Set()
 /** The active tab before the current one, per window, to hand the person's view back after a popup. */
@@ -142,6 +144,8 @@ function ungroupTab(tabId) {
  * after detaching when the stale attachment is ours.
  */
 async function attach(tabId) {
+  // A new attachment has none of the last one's frame sessions.
+  frameSessions.delete(tabId)
   try {
     await chrome.debugger.attach({ tabId }, "1.3")
   } catch (error) {
@@ -278,10 +282,36 @@ const hands = {
     return { tabId: tab.id, url: tab.url ?? "", title: tab.title ?? "", adopted: !!meta.adopted }
   },
 
-  /** A debugger command in the session's tab. */
-  async cdp({ session, group, method, params }) {
+  /** A debugger command in the session's tab, or in one of its other sites' frames (`frame`, from `frame`). */
+  async cdp({ session, group, method, params, frame }) {
     const { tabId } = await ensure(session, group)
-    return chrome.debugger.sendCommand({ tabId }, method, params ?? {})
+    const target = frame ? { tabId, sessionId: frame } : { tabId }
+    return chrome.debugger.sendCommand(target, method, params ?? {})
+  },
+
+  /**
+   * The debugger session of a frame from another site in the session's tab, which runs in a process
+   * of its own; null when the frame runs in the page's own process.
+   */
+  async frame({ session, group, frameId }) {
+    const { tabId } = await ensure(session, group)
+    const found = () => frameSessions.get(tabId)?.get(frameId)
+    for (const again of [false, true]) {
+      if (found()) break
+      const send = (autoAttach) =>
+        chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach", {
+          autoAttach,
+          waitForDebuggerOnStart: false,
+          flatten: true,
+          filter: [{ type: "iframe" }],
+        })
+      // Frames attached before this worker started aren't announced again until auto-attach is turned off and on.
+      if (again) await send(false)
+      await send(true)
+      const until = Date.now() + 2000
+      while (!found() && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+    }
+    return found() ?? null
   },
 
   async tab({ session }) {
@@ -413,7 +443,19 @@ const forwarded = {
   "Inspector.targetCrashed": () => ({}),
 }
 
-chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
+chrome.debugger.onEvent.addListener(({ tabId, sessionId }, method, params) => {
+  if (method === "Target.attachedToTarget" && params.targetInfo?.type === "iframe") {
+    if (!frameSessions.has(tabId)) frameSessions.set(tabId, new Map())
+    frameSessions.get(tabId).set(params.targetInfo.targetId, params.sessionId)
+    return
+  }
+  if (method === "Target.detachedFromTarget") {
+    for (const [frame, id] of frameSessions.get(tabId) ?? [])
+      if (id === params.sessionId) frameSessions.get(tabId).delete(frame)
+    return
+  }
+  // What a frame's own session reports isn't the page's.
+  if (sessionId) return
   if (
     method === "Page.javascriptDialogOpening" &&
     params.type === "beforeunload" &&
@@ -433,6 +475,7 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
 
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   attached.delete(tabId)
+  frameSessions.delete(tabId)
   if (reason === "canceled_by_user") canceledAt = Date.now()
   quietly(
     sessionOfTab(tabId).then((session) => {
