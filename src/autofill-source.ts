@@ -191,6 +191,14 @@ func mismatch(_ pick: String, _ labels: [String], _ matches: [Int]) -> String {
 func fill(_ pid: pid_t, _ pick: String?) {
   if !AXIsProcessTrusted() { fail("Accessibility is off for the app this runs under") }
   let app = AXUIElementCreateApplication(pid)
+  // A browser that refuses Accessibility shows no suggestions to find: say so, not "nothing offered".
+  // Seen when Chrome was updated on disk while it ran (it answers every request API-disabled until
+  // relaunched), so a fresh copy of the app answers and the running one doesn't.
+  var role: CFTypeRef?
+  let answer = AXUIElementCopyAttributeValue(app, "AXRole" as CFString, &role)
+  if answer != .success {
+    fail("The browser isn't answering Accessibility (error \(answer.rawValue)), so its suggestions can't be opened; if it was updated while running, relaunch it")
+  }
   // Chromium shows its pages' accessibility only to clients that ask.
   AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
   for _ in 0..<3 {
