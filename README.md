@@ -1,3 +1,5 @@
+**Moved to [zachsents/switch](https://github.com/zachsents/switch/tree/main/extensions/browser).** This repo is archived.
+
 # switch-ext-browser
 
 This Mac's own browser (Chrome, or another Chromium browser), signed in as the user is there, driven through its Chrome extension and the browser's debugger in background tabs, grouped and collapsed out of the way.
