@@ -22,6 +22,11 @@ const started = Date.now()
 const attached = new Set()
 /** Other sites' frames in each tab (a card form's secure boxes), as debugger sessions: tab → frame id → session. */
 const frameSessions = new Map()
+/**
+ * Tabs whose page crashed (its renderer gone, a sad tab): nothing sent to the page answers until
+ * the tab is reloaded, so the next call reloads it first.
+ */
+const crashed = new Set()
 /** Tabs being closed by a session, whose "Leave site?" prompt is accepted. */
 const closing = new Set()
 /** The active tab before the current one, per window, to hand the person's view back after a popup. */
@@ -159,6 +164,10 @@ async function attach(tabId) {
     await chrome.debugger.attach({ tabId }, "1.3")
   }
   const send = (method, params = {}) => chrome.debugger.sendCommand({ tabId }, method, params)
+  // Chrome answers this itself, and says Inspector.targetCrashed first when the page's renderer is
+  // gone (it crashed or was killed), which nothing sent to the page would ever answer.
+  await send("Inspector.enable")
+  if (crashed.has(tabId)) await revive(tabId)
   await send("Emulation.setFocusEmulationEnabled", { enabled: true })
   await send("Page.enable")
   await send("Runtime.enable")
@@ -166,6 +175,27 @@ async function attach(tabId) {
   // Never let a page open the OS file picker; uploads go through DOM.setFileInputFiles
   await send("Page.setInterceptFileChooserDialog", { enabled: true })
   attached.add(tabId)
+}
+
+/** How long a crashed tab's reload may take to finish before it's driven anyway (its page is there by then). */
+const REVIVE_MS = 15_000
+
+/** Reloads a crashed tab, which brings its page back in a new renderer, and waits for it to load. */
+async function revive(tabId) {
+  crashed.delete(tabId)
+  const { promise, resolve } = Promise.withResolvers()
+  const loaded = (id, change) => {
+    if (id === tabId && change.status === "complete") resolve()
+  }
+  chrome.tabs.onUpdated.addListener(loaded)
+  const timer = setTimeout(resolve, REVIVE_MS)
+  try {
+    await chrome.tabs.reload(tabId)
+    await promise
+  } finally {
+    clearTimeout(timer)
+    chrome.tabs.onUpdated.removeListener(loaded)
+  }
 }
 
 /** The window agents' tabs open in: the last one used, or a new minimized one if there's none. */
@@ -217,6 +247,7 @@ async function ensure(session, group) {
     await setSession(session, meta)
     quietly(groupTab(meta.tabId, group))
   }
+  if (crashed.has(meta.tabId)) await revive(meta.tabId)
   if (!attached.has(meta.tabId)) await attach(meta.tabId)
   used.set(session, Date.now())
   return meta
@@ -456,6 +487,7 @@ chrome.debugger.onEvent.addListener(({ tabId, sessionId }, method, params) => {
   }
   // What a frame's own session reports isn't the page's.
   if (sessionId) return
+  if (method === "Inspector.targetCrashed") crashed.add(tabId)
   if (
     method === "Page.javascriptDialogOpening" &&
     params.type === "beforeunload" &&
@@ -475,6 +507,7 @@ chrome.debugger.onEvent.addListener(({ tabId, sessionId }, method, params) => {
 
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
   attached.delete(tabId)
+  crashed.delete(tabId)
   frameSessions.delete(tabId)
   if (reason === "canceled_by_user") canceledAt = Date.now()
   quietly(
