@@ -36,6 +36,7 @@
   "extension": {
     "name": "browser",
     "main": "src/main.ts",
+    "heartbeat": 480000,
     "needs": [
       "browser"
     ]
